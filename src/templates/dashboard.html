@@ -2,7 +2,7 @@
 <html lang="en" class="h-full">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>Agent Trust Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -246,6 +246,53 @@
     .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 999px; background: #cbd5e1; transition: transform .2s; }
     .switch[aria-checked="true"] { background: #0284c7; }
     .switch[aria-checked="true"]::after { transform: translateX(14px); background: #fff; }
+
+    /* ================================================================ RESPONSIVE */
+    /* Chart.js canvases: let the wrapper (not the canvas) set the size, so charts shrink with the screen */
+    #deciders-box canvas, #daily-box canvas { display: block; max-width: 100%; }
+    /* Live audit trail: shorter on phones, long ids/hashes wrap instead of widening the page */
+    #audit { max-height: 45vh; overflow-x: auto; overflow-wrap: anywhere; }
+    @media (min-width: 1024px) { #audit { max-height: 720px; } }
+
+    /* Floating chat widget: almost full screen on phones, bottom-right box on desktop */
+    #chat { height: min(560px, calc(100vh - 8rem)); }
+    @media (max-width: 639px) {
+      #chat { left: 2.5vw; right: 2.5vw; width: 95vw; max-width: none; height: 80vh; height: 80dvh;
+              max-height: calc(100dvh - 6.5rem); bottom: calc(5.5rem + env(safe-area-inset-bottom)); }
+    }
+    /* Minimum 44 x 44 px tap targets for the mic / send buttons */
+    .tap-44 { min-width: 44px; min-height: 44px; }
+
+    /* Full-screen overlay on phones */
+    @media (max-width: 1023px) {
+      /* the glowing orb is smaller, and hidden once the conversation has started (saves vertical space) */
+      #ov-orb { width: 4.5rem; height: 4.5rem; }
+      #ov-orb svg { width: 2.25rem; height: 2.25rem; }
+      #ov-kicker { margin-top: 1.25rem; }
+      .ov-compact #ov-orb { display: none; }
+      .ov-compact #ov-title { margin-top: 0; }
+      /* compact charts row: swipe left / right, one card snaps into view at a time */
+      #ov-charts { scroll-snap-type: x mandatory; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch;
+                   scroll-padding-inline: 0; }
+      #ov-charts .ov-chart { flex: 0 0 82%; scroll-snap-align: start; }
+      /* input bar pinned to the bottom, clear of the home indicator */
+      #ov-inputbar { padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
+    }
+    @media (max-width: 639px) { #ov-title { min-height: 0; font-size: 1.35rem; } }
+    @media (min-width: 640px) and (max-width: 1023px) { #ov-charts .ov-chart { flex-basis: 46%; } }
+    /* On-screen keyboard open (set by the visualViewport listener): fit the overlay and the chat widget
+       into the visible area so the input bar is never hidden behind the keyboard */
+    .kb-open #ai-fullscreen-overlay { top: var(--vv-top, 0px); bottom: auto; height: var(--vv-h, 100%); }
+    .kb-open #ai-fullscreen-overlay #ov-charts { display: none; }
+    @media (max-width: 639px) {
+      .kb-open #chat { top: calc(var(--vv-top, 0px) + .5rem); bottom: auto; height: calc(var(--vv-h, 80vh) - 1rem); max-height: none; }
+      .kb-open #chat-fab { display: none !important; }
+    }
+
+    /* Modals: 95% wide on phones, max-w-2xl on desktop, content scrolls */
+    #modal-panel.modal-default { width: 95%; max-width: 42rem; }
+    #modal-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    @media (max-width: 1023px) { #spotlight { left: 2.5%; right: 2.5%; width: 95%; } }
   </style>
 </head>
 <body class="h-full font-sans text-slate-200 antialiased">
@@ -287,15 +334,15 @@
     <div class="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3 sm:px-6">
       <div class="flex items-center gap-3">
         <div class="grid h-9 w-9 place-items-center rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 text-sm font-bold text-white">VA</div>
-        <div>
-          <h1 class="text-[15px] font-semibold leading-tight text-white">Valio Aimo – Agent Trust Dashboard</h1>
-          <p class="text-xs text-slate-400">Traceability &amp; explainability for autonomous purchasing</p>
+        <div class="min-w-0">
+          <h1 class="truncate text-[15px] font-semibold leading-tight text-white"><span class="hidden sm:inline">Valio Aimo – </span>Agent Trust Dashboard</h1>
+          <p class="hidden text-xs text-slate-400 sm:block">Traceability &amp; explainability for autonomous purchasing</p>
         </div>
       </div>
-      <div id="ws-status" class="flex items-center gap-2 rounded-full border border-ink-700 bg-ink-900 px-3 py-1 text-xs"></div>
-      <div id="gw-pills" class="hidden flex-wrap items-center gap-2 text-xs md:flex"></div>
+      <div id="ws-status" class="order-last flex items-center gap-2 rounded-full border border-ink-700 bg-ink-900 px-3 py-1 text-xs sm:order-none"></div>
+      <div id="gw-pills" class="hidden flex-wrap items-center gap-2 text-xs lg:flex"></div>
       <div class="ml-auto flex items-center gap-3">
-        <div class="text-right">
+        <div class="hidden text-right sm:block">
           <p id="who" class="text-sm font-medium text-white"></p>
           <p id="who-role" class="text-[11px]"></p>
         </div>
@@ -310,13 +357,15 @@
     </div>
 
     <!-- ============================================================ METRICS -->
-    <section id="tiles" class="grid grid-cols-2 gap-3 md:grid-cols-4"></section>
+    <!-- 2 per row on phones, 4 on tablets, all in one row on wide desktops (the AI-value tile spans 2 of the 8) -->
+    <section id="tiles" class="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8"></section>
 
-    <section class="grid gap-4 lg:grid-cols-12">
+    <!-- one column on phones, 3 columns (3 / 4 / 5 of 12) on desktop -->
+    <section class="grid grid-cols-1 gap-4 lg:grid-cols-12">
       <div class="card p-4 lg:col-span-3">
         <h2 class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Order decisions</h2>
         <p class="text-[11px] text-slate-500">final outcome per order · pending excluded</p>
-        <div id="deciders-box" class="relative mx-auto mt-2 h-48 max-w-[220px]"><canvas id="chart-deciders" aria-label="Auto-approved, human approved and rejected orders"></canvas><div data-chart-skel class="absolute inset-0 grid place-items-center"><div class="skel h-40 w-40 !rounded-full"></div></div></div>
+        <div id="deciders-box" class="relative mx-auto mt-2 h-48 w-full max-w-[220px]"><canvas id="chart-deciders" aria-label="Auto-approved, human approved and rejected orders"></canvas><div data-chart-skel class="absolute inset-0 grid place-items-center"><div class="skel h-40 w-40 !rounded-full"></div></div></div>
         <p id="deciders-empty" class="hidden py-14 text-center text-xs text-slate-500">No decided orders yet</p>
       </div>
       <div class="card p-4 lg:col-span-4">
@@ -328,7 +377,7 @@
               <path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
           </button>
         </div>
-        <div id="daily-box" class="relative mt-3 h-48"><canvas id="chart-daily" aria-label="Daily placed spend"></canvas><div data-chart-skel class="absolute inset-0 flex items-end gap-3 px-2 pb-1"><div class="skel flex-1" style="height:45%"></div><div class="skel flex-1" style="height:70%"></div><div class="skel flex-1" style="height:35%"></div><div class="skel flex-1" style="height:85%"></div><div class="skel flex-1" style="height:55%"></div><div class="skel flex-1" style="height:65%"></div><div class="skel flex-1" style="height:40%"></div></div></div>
+        <div id="daily-box" class="relative mt-3 h-48 w-full"><canvas id="chart-daily" aria-label="Daily placed spend"></canvas><div data-chart-skel class="absolute inset-0 flex items-end gap-3 px-2 pb-1"><div class="skel flex-1" style="height:45%"></div><div class="skel flex-1" style="height:70%"></div><div class="skel flex-1" style="height:35%"></div><div class="skel flex-1" style="height:85%"></div><div class="skel flex-1" style="height:55%"></div><div class="skel flex-1" style="height:65%"></div><div class="skel flex-1" style="height:40%"></div></div></div>
       </div>
       <div class="card p-4 lg:col-span-5">
         <div class="flex items-center justify-between">
@@ -347,7 +396,7 @@
     </section>
 
     <!-- ============================================================ MAIN GRID -->
-    <div class="grid gap-6 lg:grid-cols-12">
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-12">
       <!-- Pending approvals -->
       <section class="lg:col-span-7">
         <div class="mb-3">
@@ -390,7 +439,7 @@
               <span class="h-2.5 w-2.5 rounded-full bg-red-500/80"></span><span class="h-2.5 w-2.5 rounded-full bg-yellow-400/80"></span><span class="h-2.5 w-2.5 rounded-full bg-green-500/80"></span>
               <span class="ml-2 truncate">valio-gateway:~$ tail -f audit_log.jsonl --purchasing</span>
             </div>
-            <ol id="audit" class="scrollbar max-h-[720px] divide-y overflow-auto bg-black font-mono"></ol>
+            <ol id="audit" class="scrollbar w-full divide-y overflow-y-auto overflow-x-auto bg-black font-mono"></ol>
           </div>
         </section>
       </aside>
@@ -421,7 +470,7 @@
 <!-- Generic modal (confirmations + expanded charts). Built by openModal() -->
 <div id="modal" class="modal-root fixed inset-0 z-[105] hidden items-center justify-center p-4" data-state="closed" role="dialog" aria-modal="true" aria-labelledby="modal-title">
   <div data-modal-backdrop class="absolute inset-0 bg-ink-950/70 backdrop-blur-md"></div>
-  <div id="modal-panel" class="modal-panel card relative flex max-h-[90vh] w-full flex-col overflow-hidden !bg-ink-900/85" style="max-width:520px">
+  <div id="modal-panel" class="modal-panel modal-default card relative flex max-h-[90vh] w-[95%] max-w-2xl flex-col overflow-hidden !bg-ink-900/85">
     <div class="flex items-start justify-between gap-3 border-b border-white/10 px-5 py-4">
       <div class="min-w-0"><p id="modal-kicker" class="text-[11px] font-semibold uppercase tracking-wider text-slate-400"></p>
         <h3 id="modal-title" class="mt-0.5 text-lg font-semibold text-white"></h3></div>
@@ -511,7 +560,7 @@
     </div>
 
     <!-- Middle: compact row of the dashboard's existing charts -->
-    <div id="ov-charts" class="ov-fade scrollbar mx-auto flex w-full max-w-5xl shrink-0 flex-row gap-3 overflow-x-auto pb-1" aria-label="Dashboard at a glance">
+    <div id="ov-charts" class="ov-fade scrollbar mx-auto flex w-full max-w-5xl shrink-0 snap-x snap-mandatory flex-row gap-3 overflow-x-auto pb-1 lg:snap-none" aria-label="Dashboard at a glance">
       <div class="ov-chart rounded-2xl border border-white/10 bg-white/5 p-3 backdrop-blur-lg">
         <p class="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Orders</p>
         <div class="ov-chart-body" data-ovslot="orders"></div>
@@ -540,13 +589,13 @@
       <span data-listen-text>🎙️ Listening…</span></div></div>
       <form id="ov-form" class="mt-1.5 flex items-center gap-2 rounded-2xl border border-violet-400/30 bg-white/5 p-1.5 backdrop-blur-lg shadow-[0_0_20px_rgba(139,92,246,0.2)] focus-within:border-violet-400/60">
         <input id="ov-input" maxlength="500" autocomplete="off" placeholder="Ask anything… e.g. “What needs my approval?”"
-               class="min-w-0 flex-1 bg-transparent px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none">
+               class="min-h-[44px] min-w-0 flex-1 bg-transparent px-3 py-2.5 text-base text-white sm:text-sm placeholder-slate-500 focus:outline-none">
         <button type="button" id="ov-mic" aria-label="Speak instead" title="Speak instead" aria-pressed="false"
-                class="mic-btn grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-rose-400/40 text-rose-300 hover:bg-white/10">
+                class="mic-btn tap-44 grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-rose-400/40 text-rose-300 hover:bg-white/10">
           <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 18v4"/></svg>
         </button>
-        <button id="ov-send" class="h-10 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-500 px-5 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50">Ask</button>
+        <button id="ov-send" class="tap-44 h-11 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-500 px-5 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50">Ask</button>
       </form>
     </div>
   </div>
@@ -578,8 +627,7 @@
 </button>
 
 <section id="chat" role="dialog" aria-label="Valio Aimo Voice Secretary"
-         class="fixed bottom-24 right-4 z-40 hidden w-[calc(100vw-2rem)] max-w-[400px] flex-col overflow-hidden rounded-2xl border border-indigo-400/20 bg-ink-900 shadow-2xl chat-glow-soft"
-         style="height:min(560px, calc(100vh - 8rem));">
+         class="fixed bottom-24 right-4 z-40 hidden w-[95vw] max-w-[400px] flex-col overflow-hidden rounded-2xl border border-indigo-400/20 bg-ink-900 shadow-2xl chat-glow-soft sm:w-[calc(100vw-2rem)]">
   <header class="flex items-center gap-3 border-b border-ink-700 bg-gradient-to-r from-sky-500/10 via-indigo-500/10 to-fuchsia-500/10 px-4 py-3">
     <svg class="h-6 w-6 shrink-0"><use href="#sparkle"/></svg>
     <div class="min-w-0 flex-1">
@@ -587,16 +635,16 @@
       <p class="text-[11px] text-slate-400">Powered by Gemini · <span id="chat-model">reads the live dashboard</span></p>
     </div>
     <!-- Small speaker icon: mute / unmute spoken replies -->
-    <button id="voice-toggle" class="grid h-8 w-8 place-items-center rounded-full border border-ink-600 text-base hover:bg-ink-800"
+    <button id="voice-toggle" class="grid h-10 w-10 place-items-center sm:h-8 sm:w-8 rounded-full border border-ink-600 text-base hover:bg-ink-800"
             role="switch" aria-checked="true" title="Voice replies on: click to mute">
       <span id="voice-icon" aria-hidden="true">🔊</span><span id="voice-label" class="sr-only">Voice on</span>
     </button>
-    <button id="chat-expand" class="grid h-8 w-8 place-items-center rounded-full border border-ink-600 text-slate-300 hover:bg-ink-800 hover:text-white"
+    <button id="chat-expand" class="grid h-10 w-10 place-items-center sm:h-8 sm:w-8 rounded-full border border-ink-600 text-slate-300 hover:bg-ink-800 hover:text-white"
             aria-label="Open the full-screen assistant" title="Full screen">
       <svg id="chat-expand-icon" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
     </button>
-    <button id="chat-close" class="rounded-md px-2 py-1 text-slate-400 hover:bg-ink-800 hover:text-white" aria-label="Close chat">✕</button>
+    <button id="chat-close" class="grid h-10 w-10 place-items-center rounded-md text-slate-400 sm:h-8 sm:w-8 hover:bg-ink-800 hover:text-white" aria-label="Close chat">✕</button>
   </header>
   <div id="chat-log" class="scrollbar flex-1 space-y-3 overflow-y-auto px-4 py-4" aria-live="polite">
     <div class="rounded-xl bg-ink-850 px-3 py-2.5 text-sm text-slate-300">
@@ -620,24 +668,44 @@
       <span data-listen-text>🎙️ Listening…</span></div></div>
   <form id="chat-form" class="flex gap-2 px-4 pb-3 pt-1">
     <input id="chat-input" maxlength="500" autocomplete="off" placeholder="Ask or tap the mic…"
-           class="min-w-0 flex-1 rounded-lg border border-ink-600 bg-ink-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-indigo-400 focus:outline-none">
+           class="min-h-[44px] min-w-0 flex-1 rounded-lg border border-ink-600 bg-ink-950 px-3 py-2 text-base text-white sm:text-sm placeholder-slate-500 focus:border-indigo-400 focus:outline-none">
     <!-- Microphone next to Send: pulses red while listening -->
     <button type="button" id="mic-inline" aria-label="Speak your question" aria-pressed="false" title="Speak your question"
-            class="mic-btn grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-rose-400/40 text-rose-300 hover:bg-ink-800">
-      <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            class="mic-btn tap-44 grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-rose-400/40 text-rose-300 hover:bg-ink-800">
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 18v4"/>
       </svg>
     </button>
-    <button id="chat-send" class="rounded-lg bg-gradient-to-r from-sky-500 to-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50">Send</button>
+    <button id="chat-send" class="tap-44 rounded-lg bg-gradient-to-r from-sky-500 to-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50">Send</button>
   </form>
 </section>
 
-<script>{% raw %}
+{% raw %}<script>
 (() => {
   "use strict";
 
   // ======================================================================== utilities
   const $ = (id) => document.getElementById(id);
+
+  // Mobile keyboard: track the visible viewport so the overlay / chat widget input bars stay above the
+  // on-screen keyboard (iOS Safari does not resize the layout viewport; CSS uses .kb-open + --vv-*)
+  (() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const root = document.documentElement;
+    let raf = 0;
+    const fit = () => {
+      raf = 0;
+      const kb = window.innerHeight - vv.height - vv.offsetTop;
+      root.style.setProperty("--vv-h", `${Math.round(vv.height)}px`);
+      root.style.setProperty("--vv-top", `${Math.round(vv.offsetTop)}px`);
+      root.classList.toggle("kb-open", kb > 120 && window.innerWidth < 1024);
+    };
+    const queue = () => { if (!raf) raf = requestAnimationFrame(fit); };
+    vv.addEventListener("resize", queue);
+    vv.addEventListener("scroll", queue);
+    fit();
+  })();
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const eur = (v) => v == null ? "—" : new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR" }).format(v);
   const num = (v) => v == null ? "—" : new Intl.NumberFormat("en-IE", { maximumFractionDigits: 3 }).format(v);
@@ -698,7 +766,7 @@
 
   // ------------------------------------------------------------------ modal (confirmations + expanded charts)
   const modal = { onClose: null, lastFocus: null, open: false };
-  function openModal({ kicker = "", title = "", body = "", actions = [], width = "520px", height = null, onClose = null } = {}) {
+  function openModal({ kicker = "", title = "", body = "", actions = [], width = null, height = null, onClose = null } = {}) {
     closeModal(true);
     const root = $("modal"), panel = $("modal-panel");
     $("modal-kicker").textContent = kicker;
@@ -718,8 +786,10 @@
       if (a.autofocus) b.dataset.autofocus = "1";
       act.append(b);
     });
-    panel.style.maxWidth = width;
-    panel.style.width = width === "520px" ? "100%" : width;
+    // default: 95% wide on phones, max-w-2xl on desktop (CSS); expanded charts pass their own size
+    panel.classList.toggle("modal-default", !width);
+    panel.style.maxWidth = width || "";
+    panel.style.width = width || "";
     panel.style.height = height || "";
     modal.onClose = onClose;
     modal.lastFocus = document.activeElement;
@@ -1273,7 +1343,7 @@
     const expl = e.explanation && S.explain
       ? `<p class="mt-1 border-l-2 ${cls === "term-err" ? "border-red-500/60" : cls === "term-warn" ? "border-yellow-400/60" : "border-green-500/60"} pl-2.5 text-[11px] leading-relaxed text-green-200/70">${esc(e.explanation)}</p>` : "";
     return `<li class="${fresh ? "fade-in " : ""}${won ? "neg-won " : ""}px-4 py-2 text-[12px] ${e.order_id ? "cursor-pointer hover:bg-white/[0.04]" : ""}" ${e.order_id ? `data-audit="${esc(e.order_id)}"` : ""}>
-      <div class="flex items-baseline gap-2">
+      <div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
         <span class="term-dim shrink-0" title="${esc(e.timestamp)}">[${esc(clock(e.timestamp))}]</span>
         <span class="${cls} shrink-0 font-semibold">${won ? "🤝 " : ""}${esc(e.action)}</span>
         ${e.status ? `<span class="${cls} shrink-0 opacity-80">${esc(e.status)}</span>` : ""}
@@ -2909,6 +2979,6 @@
   if (S.token) start(); else { $("login").classList.remove("hidden"); $("login").classList.add("flex"); }
   setInterval(() => document.querySelectorAll("#audit [title]").length && !document.hidden && S.audit.length && renderAudit(), 60000); // refresh "x min ago"
 })();
-{% endraw %}</script>
+</script>{% endraw %}
 </body>
 </html>
