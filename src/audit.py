@@ -56,6 +56,8 @@ class Action:
     LAST_MINUTE_EVENT_ORDER = "LAST_MINUTE_EVENT_ORDER"   # "big event tomorrow, buy 500 L of ..." (chat or API)
     ORDERED_BY_AI_SECRETARY = "ORDERED_BY_AI_SECRETARY"   # catalog search -> place_order from the chat, confirmed
     QUICK_ORDER = "QUICK_ORDER"             # one-click "Order" button on a catalog result (manager, dashboard)
+    INVENTORY_RESTOCK = "INVENTORY_RESTOCK"  # standing-order restock of a low inventory item (button / chat / API)
+    INVENTORY_COUNT = "INVENTORY_COUNT"      # a physical stock count recorded by a manager
     OFFER = "OFFER"
     TRUST_RULE = "TRUST_RULE"
     TRUST_LEVEL = "TRUST_LEVEL"
@@ -435,6 +437,10 @@ def _summarize(e: dict[str, Any]) -> str:
         return f"🛒 AI secretary order: {d.get('message')}"
     if a == Action.QUICK_ORDER:
         return f"⚡ Quick order ({d.get('source')}): {d.get('message')}"
+    if a == Action.INVENTORY_RESTOCK:
+        return f"📦 Inventory restock ({d.get('source')}): {d.get('message')}"
+    if a == Action.INVENTORY_COUNT:
+        return f"📋 Stock count: {d.get('label')} = {d.get('on_hand'):g} {d.get('sales_unit') or 'units'}"
     if a == Action.ORDER_SUBMITTED:
         sig = d.get("quote_signature")
         flag = "" if sig == "OK" else f" ⚠ quote signature {sig}"

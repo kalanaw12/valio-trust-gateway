@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import secrets
 import threading
@@ -38,6 +39,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from . import inventory
 from .audit import Action, AuditLog, summarize_entry
 from .data_adapter import DataAdapter, UpstreamError
 from .database import Database
@@ -152,6 +154,7 @@ class GatewayState:
     async def startup(self) -> None:
         self.hub.loop = asyncio.get_running_loop()
         self.seed_users()
+        inventory.ensure_schema(self.db)      # stock-count table + baseline counts (no orders are created)
         await self.adapter.startup()
         mode = os.getenv("GATEWAY_UPSTREAM", "auto").lower()
         if mode == "mock" or (mode == "auto" and not os.getenv("VALIO_API_KEY")):
@@ -1772,6 +1775,70 @@ def _propose_order(viewer: Viewer, question: str, req: EventRequest, actions_out
     return {"ok": out["ok"], "status": "done", "message": out["message"], "order_status": out["status"]}
 
 
+def _inventory_for_model(report: dict[str, Any]) -> dict[str, Any]:
+    """Compact inventory report for Gemini (and the chat's inventory card)."""
+    return {
+        "status": report["status"], "low_items": report["low_items"], "delivery_date": report.get("delivery_date"),
+        "items": [{k: r.get(k) for k in ("product_id", "label", "sales_unit", "on_hand", "par_level", "target_level",
+                                         "days_of_cover", "status", "incoming", "awaiting_approval", "suggested_qty",
+                                         "capped_by", "unit_price_eur", "estimated_cost_eur", "availability")}
+                  | {"weekly_limit": r["limits"]["weekly_limit"], "weekly_remaining": r["limits"]["weekly_remaining"],
+                     "monthly_limit": r["limits"]["monthly_limit"], "monthly_remaining": r["limits"]["monthly_remaining"]}
+                  for r in report["items"]],
+        "estimated_restock_total_eur": report.get("estimated_restock_total_eur"),
+        "budget": report["budget"], "stock_model": report["stock_model"],
+    }
+
+
+def _inventory_tool(viewer: Viewer, actions_out: list[dict[str, Any]]) -> dict[str, Any]:
+    """check_inventory_levels: read-only. The dashboard shows the result as an inventory card."""
+    report = asyncio.run_coroutine_threadsafe(_inventory_report(_ordering_agent(None)), state.hub.loop).result(45)
+    compact = _inventory_for_model(report)
+    actions_out.append({"type": "inventory", "report": compact, "can_restock": viewer.role == "manager"})
+    hint = ("Summarise: which items are below par (stock vs par, days of cover), what you'd order (suggested_qty, "
+            "estimated cost) and any cap (capped_by: weekly_limit / monthly_limit / weekly_budget / monthly_budget). "
+            + ("If something should be ordered, propose it: ask whether to restock now (they can say yes, or tap "
+               "'Restock now' on the card); on yes call restock_inventory." if viewer.role == "manager"
+               else "This user is an auditor (read-only): don't offer to order."))
+    return {"ok": True, **compact, "instruction": hint}
+
+
+def _restock_tool(viewer: Viewer, question: str, actions_out: list[dict[str, Any]]) -> dict[str, Any]:
+    """restock_inventory: plan the restock (dry run), then a pending action the manager confirms."""
+    if viewer.role != "manager":
+        return {"ok": False, "error": "This user is an auditor (read-only) and cannot order."}
+    agent = _ordering_agent(None)
+    actor = f"agent:{agent.agent_id} (for {viewer.username}, chat restock)"
+    plan = asyncio.run_coroutine_threadsafe(_restock_inventory(agent, actor, source="chat", dry_run=True),
+                                            state.hub.loop).result(60)
+    planned = [x for x in plan["results"] if x["status"] == "PLANNED"]
+    if not planned:
+        return {"ok": True, "status": "nothing_to_order", "message": plan["message"]}
+    if not _TOOLS_REQUIRE_CONFIRMATION:
+        out = asyncio.run_coroutine_threadsafe(_restock_inventory(agent, actor, source="chat"), state.hub.loop).result(120)
+        actions_out.append({"type": "executed", "decision": "order", "order_id": "inventory", "ok": out["ok"], "message": out["message"]})
+        return {"ok": out["ok"], "status": "done", "message": out["message"]}
+    summary = {"order_id": "standing order", "net_total_eur": plan["estimated_total_eur"],
+               "contents": "; ".join(f"{x['quantity']:g} {x['sales_unit']} {x['label']}" for x in planned),
+               "why_it_needs_a_human": "Restock of the hotel's standing-order items below par, within the weekly / "
+                                       "monthly limits and budget. Each line still goes through the guardrails."}
+    action = {"action_id": _new_id("act"), "kind": "inventory_restock", "decision": "order", "order_id": "standing order",
+              "reason": f"Auto-restock, delivery {plan['delivery_date']}", "username": viewer.username,
+              "question": question, "model": None, "summary": summary,
+              "product_ids": [x["substituted"]["instead_of"] if x.get("substituted") else x["product_id"] for x in planned],
+              "expires": time.monotonic() + _ACTION_TTL_SECONDS}
+    with _pending_lock:
+        for k in [k for k, v in _pending_actions.items() if v["username"] == viewer.username]:
+            _pending_actions.pop(k, None)
+        _pending_actions[action["action_id"]] = action
+    actions_out.append({"type": "pending", **{k: action[k] for k in ("action_id", "decision", "order_id", "reason", "summary")},
+                        "kind": "inventory_restock"})
+    return {"ok": True, "status": "awaiting_manager_confirmation", "plan": planned,
+            "estimated_total_eur": plan["estimated_total_eur"], "delivery_date": plan["delivery_date"],
+            "instruction": "Not ordered yet. Tell the manager what will be restocked (items, packs, estimated total) and "
+                           "ask them to say 'yes' or tap Confirm."}
+
+
 def _make_tool_executor(viewer: Viewer, question: str, actions_out: list[dict[str, Any]]):
     """Executor handed to explainer: validates every tool call against the database before anything runs."""
     ordered: list[str] = []
@@ -1782,7 +1849,14 @@ def _make_tool_executor(viewer: Viewer, question: str, actions_out: list[dict[st
         if name == "search_catalog":
             return _catalog_tool(viewer, args, actions_out)
         if name == "get_contact_info":
-            return _contact_tool(args, actions_out)
+            return _contact_tool(args, actions_out, allowed=_contact_chosen(viewer.username, question))
+        if name == "check_inventory_levels":
+            return _inventory_tool(viewer, actions_out)
+        if name == "restock_inventory":
+            if ordered:
+                return {"ok": False, "error": "Only one order per request."}
+            ordered.append(name)
+            return _restock_tool(viewer, question, actions_out)
         if name in ("place_order", "order_for_last_minute_event"):
             if ordered:          # one order per request: a confused model can't fan out into many orders
                 return {"ok": False, "error": "Only one order per request. Tell the manager what you prepared; "
@@ -1972,7 +2046,46 @@ def _contact_for(topic: str) -> dict[str, Any]:
     return out
 
 
-def _contact_tool(args: dict[str, Any], actions_out: list[dict[str, Any]]) -> dict[str, Any]:
+def _ensure_unavailable_question(answer: str, tool_actions: Optional[list[dict[str, Any]]]) -> str:
+    """
+    Unavailable requests must end with the choice 'alternative or contact Sales Service'. The prompt asks for
+    it; this guarantees it when the model only stated the problem. Uses only real data from the tool result.
+    """
+    unav = next((a["result"] for a in tool_actions or []
+                 if isinstance(a.get("result"), dict) and a["result"].get("unavailable")), None)
+    if not unav or "?" in answer or "myyntipalvelu@" in answer:
+        return answer
+    choice = "choose an available alternative"
+    if unav.get("earliest_delivery"):
+        try:
+            choice = f"choose {date.fromisoformat(str(unav['earliest_delivery'])[:10]).strftime('%A %d %B').replace(' 0', ' ')} instead"
+        except ValueError:
+            pass
+    elif unav.get("available_alternatives"):
+        choice = "choose an available alternative such as " + " or ".join(
+            x["name"] for x in unav["available_alternatives"][:2])
+    return f"{answer.rstrip()}\n\nWould you like to {choice}, or contact Valio Aimo Sales Service?"
+
+
+_CONTACT_OFFER_RE = re.compile(r"\b(contact|sales service|get in touch|reach out)\b", re.I)
+_CHOICE_RE = re.compile(r"^\W*(yes|yeah|yep|sure|ok(ay)?|please|kyllä|joo|ja|the (first|former)|sales service|them)\b", re.I)
+
+
+def _contact_chosen(username: str, question: str) -> bool:
+    """'Ask first', enforced: contact details only once the manager asked for them, or says yes to our offer."""
+    if _CONTACT_ASK_RE.search(question):
+        return True
+    last = next((m["text"] for m in reversed(_chat_history(username)) if m["role"] == "model"), "")
+    # a short "yes please" / "the sales service" right after we offered to put them in touch
+    return bool(_CONTACT_OFFER_RE.search(last)) and len(question.split()) <= 6 and bool(_CHOICE_RE.search(question))
+
+
+def _contact_tool(args: dict[str, Any], actions_out: list[dict[str, Any]], *, allowed: bool = True) -> dict[str, Any]:
+    if not allowed:
+        return {"ok": False, "error": "ASK_FIRST",
+                "instruction": "The manager hasn't chosen to contact anyone yet. Don't give contact details: say what "
+                               "isn't possible and ask whether they'd like to contact Valio Aimo Sales Service or choose "
+                               "an available alternative (name the real alternatives you have)."}
     topic = str(args.get("topic") or "other").strip().lower()
     info = _contact_for(topic)
     card = info if info["verified"] else info.get("general_contact")
@@ -2047,15 +2160,17 @@ async def _answer(question: str, mode: str, viewer: Viewer, extra: Optional[dict
     actions: list[dict[str, Any]] = []
     # Everyone may be SHOWN things; only managers get approve/reject. Analytics requests get no tools at all.
     tool_names = (["focus_ui_element", "search_catalog", "place_order", "approve_order", "reject_order",
-                   "order_for_last_minute_event", "get_contact_info"]
-                  if viewer.role == "manager" else ["focus_ui_element", "search_catalog", "get_contact_info"])
+                   "order_for_last_minute_event", "get_contact_info", "check_inventory_levels", "restock_inventory"]
+                  if viewer.role == "manager" else ["focus_ui_element", "search_catalog", "get_contact_info",
+                                                    "check_inventory_levels"])
     executor = _make_tool_executor(viewer, question, actions) if allow_actions else None
     if allow_actions:
         if ls := _last_search_context(viewer.username):
             context["last_catalog_search"] = ls
     history = _chat_history(viewer.username) if allow_actions else []
     result = await _ask_gemini(explainer.explain_decision_ex, question, context, mode, executor, tool_names, history)
-    result["answer"] = _guard_contacts(result["answer"], question, actions)
+    result["answer"] = _ensure_unavailable_question(_guard_contacts(result["answer"], question, actions),
+                                                    result.get("actions"))
     if allow_actions:
         _remember_chat(viewer.username, question, result["answer"])
     _ai_model_from_result(result, actions)
@@ -2236,6 +2351,188 @@ async def quick_order(req: QuickOrderRequest, who: dict = Depends(_negotiation_i
     return result
 
 
+# =============================================================================
+# Hotel inventory & standing orders (src/inventory.py)
+# =============================================================================
+_restock_lock = asyncio.Lock()      # one restock at a time: a double click can't order twice
+
+
+async def _inventory_report(agent: Agent, delivery: Optional[date] = None) -> dict[str, Any]:
+    """Stock vs par levels, priced with LIVE Valio prices for the next delivery day (budget check included)."""
+    delivery = delivery or _next_business_day()
+    ids = [i["product_id"] for i in inventory.STANDING_ORDER["items"]]
+    prices: dict[str, float] = {}
+    avail: dict[str, str] = {}
+    try:
+        live = await state.adapter.live_snapshot(agent.customer, delivery.isoformat(), ids)
+        for pid, snap in live.items():
+            price, a = snap.get("price"), snap.get("availability")
+            if price and price.unit_price:
+                prices[pid] = float(price.unit_price)
+            if a:
+                avail[pid] = a.status
+    except Exception as exc:          # still report stock levels; the budget check is then skipped
+        logger.warning("inventory: live prices unavailable (%s)", type(exc).__name__)
+    report = inventory.check_inventory_levels(state.db, state.adapter.catalog, agent.customer, prices=prices or None)
+    for row in report["items"]:
+        row["availability"] = avail.get(row["product_id"])
+    report["delivery_date"] = delivery.isoformat()
+    report["live_prices"] = bool(prices)
+    return report
+
+
+def _best_substitute(p: Any, alternatives: list[dict[str, Any]], qty: float) -> Optional[dict[str, Any]]:
+    """Cheapest in-stock equivalent per litre / kg (same content unit), with the pack count converted."""
+    if not (p and p.content_per_sales_unit and p.base_unit_content_uom):
+        return None
+    best = None
+    for a in alternatives:
+        q = state.adapter.catalog.get(a["product_id"])
+        if not (q and q.content_per_sales_unit and q.base_unit_content_uom == p.base_unit_content_uom):
+            continue
+        per_base = a["price_eur_per_sales_unit"] / q.content_per_sales_unit
+        if best is None or per_base < best["per_base"]:
+            packs = math.ceil(qty * p.content_per_sales_unit / q.content_per_sales_unit)
+            best = {"product_id": q.id, "name": q.display_name, "qty": packs, "per_base": per_base,
+                    "unit_price_eur": a["price_eur_per_sales_unit"], "sales_unit": q.sales_unit}
+    return best
+
+
+async def _restock_inventory(agent: Agent, actor: str, *, source: str, product_ids: Optional[list[str]] = None,
+                             dry_run: bool = False) -> dict[str, Any]:
+    """
+    Order what the inventory check says is needed. Every line goes through the normal pipeline
+    (live price + stock -> signed quote -> guardrails -> negotiation -> audit -> websockets), so the
+    guardrails may still hold a line for approval or reject it. If a standing-order product is out of stock
+    or unpriced, the cheapest in-stock equivalent (per litre / kg) is used instead, and the result says so.
+    """
+    async with _restock_lock:
+        report = await _inventory_report(agent)
+        delivery = report["delivery_date"]
+        rows = [r for r in report["items"] if r["suggested_qty"] > 0
+                and (not product_ids or r["product_id"] in product_ids)]
+        results: list[dict[str, Any]] = []
+        for r in rows:
+            p = state.adapter.catalog.get(r["product_id"])
+            pid, qty, price, substituted = r["product_id"], float(r["suggested_qty"]), r["unit_price_eur"], None
+            if r.get("availability") != "AVAILABLE" or not price:
+                alts = await _available_alternatives(p, delivery, agent, k=5) if p else []
+                sub = _best_substitute(p, alts, qty)
+                if sub is None:
+                    results.append({"product_id": pid, "label": r["label"], "quantity": qty, "status": "SKIPPED",
+                                    "message": f"{r['label']} is {(r.get('availability') or 'not priced').replace('_', ' ').lower()} "
+                                               f"for {delivery} and no equivalent product is in stock."})
+                    continue
+                substituted = {"instead_of": pid, "instead_of_label": r["label"]}
+                pid, qty, price = sub["product_id"], float(sub["qty"]), sub["unit_price_eur"]
+            name = (state.adapter.catalog.get(pid).display_name if state.adapter.catalog.get(pid) else r["label"])
+            entry = {"product_id": pid, "label": r["label"], "product": name, "quantity": qty,
+                     "sales_unit": r["sales_unit"], "estimated_total_eur": round(qty * price, 2) if price else None,
+                     "substituted": substituted}
+            if dry_run:
+                results.append({**entry, "status": "PLANNED"})
+                continue
+            try:
+                out = await _event_order(agent, EventRequest(product_name=name[:120].ljust(2), product_id=pid, quantity=qty,
+                                                             unit="units", delivery_date=date.fromisoformat(delivery)),
+                                         actor, source=source, audit_action=Action.INVENTORY_RESTOCK)
+            except HTTPException as exc:
+                d = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+                results.append({**entry, "status": "FAILED", "message": d.get("detail") or d.get("error")})
+                continue
+            o = out["order"]
+            results.append({**entry, "status": out["status"], "order_id": out["order_id"],
+                            "quantity": float(o["lines"][0]["quantity"]) if o.get("lines") else qty,
+                            "net_total_eur": o["decision"]["totals"]["net_total"], "message": out["message"]})
+
+        after = report if dry_run else await _inventory_report(agent)
+        if not dry_run and results:
+            state.hub.publish("inventory", {"status": after["status"], "low_count": after["low_count"]})
+        by = {s: [x for x in results if x["status"] == s] for s in ("PLACED", "PENDING_APPROVAL", "REJECTED", "FAILED", "SKIPPED", "PLANNED")}
+        if not rows:
+            msg = ("Inventory is healthy: nothing needs restocking." if report["status"] == "HEALTHY" else
+                   "Some items are low, but they are already on order / awaiting approval, or the weekly / monthly "
+                   "limits or budget leave nothing to order.")
+        elif dry_run:
+            msg = f"Restock plan for delivery {delivery}: " + "; ".join(
+                f"{x['quantity']:g} {x['sales_unit']} {x['label']}" + (f" (≈€{x['estimated_total_eur']:,.2f})" if x["estimated_total_eur"] else "")
+                for x in by["PLANNED"]) + (f". Not orderable: {'; '.join(x['label'] for x in by['SKIPPED'])}." if by["SKIPPED"] else ".")
+        else:
+            parts = []
+            if by["PLACED"]:
+                parts.append(f"placed {len(by['PLACED'])} order(s) (€{sum(x['net_total_eur'] for x in by['PLACED']):,.2f})")
+            if by["PENDING_APPROVAL"]:
+                parts.append(f"{len(by['PENDING_APPROVAL'])} awaiting your approval")
+            for s in ("REJECTED", "FAILED", "SKIPPED"):
+                if by[s]:
+                    parts.append(f"{len(by[s])} {s.lower()} ({', '.join(x['label'] for x in by[s])})")
+            msg = f"Restock for delivery {delivery}: " + ", ".join(parts) + "."
+        return {"ok": not dry_run and bool(by["PLACED"] or by["PENDING_APPROVAL"]) or (dry_run and bool(by["PLANNED"])),
+                "dry_run": dry_run, "delivery_date": delivery, "message": msg, "results": results,
+                "estimated_total_eur": round(sum(x.get("estimated_total_eur") or 0 for x in results), 2),
+                "inventory": after}
+
+
+def _manager_ordering_identity(who: dict[str, Any], what: str) -> tuple[Agent, str]:
+    if who["manager"] is not None:
+        if who["manager"].role != "manager":
+            raise HTTPException(403, detail={"error": "FORBIDDEN", "detail": "Auditors have read-only access"})
+        agent = _ordering_agent(None)
+        return agent, f"agent:{agent.agent_id} (for {who['manager'].username}, {what})"
+    return who["agent"], who["actor"]
+
+
+@app.get("/v1/inventory", tags=["human"])
+async def inventory_status(viewer: Viewer = Depends(require_viewer)) -> dict[str, Any]:
+    """The hotel's standing-order items: current stock, par levels, weekly/monthly limits, budget and what's needed."""
+    return await _inventory_report(_ordering_agent(None))
+
+
+class RestockRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    product_ids: Optional[list[str]] = Field(None, description="Only these standing-order items (default: all low items)")
+    dry_run: bool = Field(False, description="Plan only: what would be ordered and the estimated cost")
+
+
+@app.post("/v1/inventory/restock", tags=["human"])
+async def inventory_restock(req: Optional[RestockRequest] = None,
+                            who: dict = Depends(_negotiation_identity)) -> dict[str, Any]:
+    """
+    Auto-restock: order the low standing-order items back up to their target level, within the weekly/monthly
+    limits and budget, at live prices, through the guardrails. A manager (dashboard) or an agent with 'order' scope.
+    """
+    req = req or RestockRequest()
+    agent, actor = _manager_ordering_identity(who, "auto-restock")
+    unknown = [p for p in (req.product_ids or []) if inventory.item(p) is None]
+    if unknown:
+        raise HTTPException(404, detail={"error": "NOT_IN_STANDING_ORDER", "detail": f"Not standing-order items: {unknown}"})
+    return await _restock_inventory(agent, actor, source="restock_button" if who["manager"] else "agent_api",
+                                    product_ids=req.product_ids, dry_run=req.dry_run)
+
+
+class StockCountRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    product_id: str = Field(..., max_length=40)
+    on_hand: float = Field(..., ge=0, le=1_000_000, description="Counted stock, in the product's sales units")
+
+
+@app.post("/v1/inventory/count", tags=["human"])
+async def inventory_count(req: StockCountRequest, viewer: Viewer = Depends(require_manager)) -> dict[str, Any]:
+    """Record a physical stock count: the new baseline for the stock estimate."""
+    it = inventory.item(req.product_id)
+    if it is None:
+        raise HTTPException(404, detail={"error": "NOT_IN_STANDING_ORDER", "detail": f"{req.product_id} is not a standing-order item"})
+    count = inventory.record_count(state.db, req.product_id, req.on_hand, f"human:{viewer.username}")
+    p = state.adapter.catalog.get(req.product_id)
+    state.audit.record(Action.INVENTORY_COUNT, {**count, "label": it["label"], "sales_unit": p.sales_unit if p else None},
+                       actor=f"human:{viewer.username}")
+    report = await _inventory_report(_ordering_agent(None))
+    state.hub.publish("inventory", {"status": report["status"], "low_count": report["low_count"]})
+    return {"ok": True, "count": count, "inventory": report}
+
+
 @app.post("/v1/chat/actions/{action_id}", tags=["human"])
 async def confirm_ai_action(action_id: str, req: ActionDecision,
                             viewer: Viewer = Depends(require_manager)) -> dict[str, Any]:
@@ -2252,9 +2549,16 @@ async def confirm_ai_action(action_id: str, req: ActionDecision,
                                                       f"{action['order_id']}", "action_id": action_id},
                            actor=f"human:{viewer.username}", refs=[action["order_id"]])
         return {"ok": True, "status": "cancelled", "order_id": action["order_id"],
-                "message": "Okay, I won't place that order." if action.get("kind") in _ORDER_KINDS
+                "message": "Okay, I won't restock now." if action.get("kind") == "inventory_restock"
+                           else "Okay, I won't place that order." if action.get("kind") in _ORDER_KINDS
                            else f"Okay, I won't {action['decision']} that order."}
-    if action.get("kind") in _ORDER_KINDS:
+    if action.get("kind") == "inventory_restock":
+        agent = _ordering_agent(None)
+        out = await _restock_inventory(agent, f"agent:{agent.agent_id} (for {viewer.username}, confirmed restock)",
+                                       source="chat", product_ids=action.get("product_ids"))
+        res = {"ok": out["ok"], "status": "done" if out["ok"] else "failed", "order_id": "standing order",
+               "message": out["message"], "restock": out["results"]}
+    elif action.get("kind") in _ORDER_KINDS:
         agent = _ordering_agent(None)
         try:
             out = await _event_order(agent, EventRequest(**action["event"]),

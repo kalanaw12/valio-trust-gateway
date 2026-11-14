@@ -89,9 +89,11 @@ SYSTEM_PROMPT = (
     "is OUT_OF_STOCK or has no price, Valio can't deliver on that date, or it's something none of your tools can "
     "do, e.g. a specific delivery time slot, custom packaging, a special price or any other special arrangement), "
     "say so plainly and kindly. Never promise or imply it can be done.\n"
-    "- Then ask whether they would like to contact the relevant department or choose an available alternative. "
-    "Name the concrete alternatives you actually have: earliest_delivery, the alternatives a tool returned, or "
-    "in-stock products from search_catalog. Don't invent alternatives.\n"
+    "- Then ALWAYS end that reply with the question whether they would like to contact the relevant department "
+    "(for orders: Valio Aimo Sales Service) or choose an available alternative, e.g. 'Would you like to choose "
+    "Monday 16 November instead, or contact Valio Aimo Sales Service?'. Name the concrete alternatives you "
+    "actually have: earliest_delivery, the alternatives a tool returned, or in-stock products from "
+    "search_catalog. Don't invent alternatives.\n"
     "- Ask FIRST, then wait for their answer: in the reply where you say something is unavailable, do NOT call "
     "get_contact_info and do NOT give any contact details yet; just offer the two options. (If the manager "
     "explicitly asks for contact details, give them straight away.)\n"
@@ -101,6 +103,20 @@ SYSTEM_PROMPT = (
     "write any other e-mail address, phone number or web address. If it says verified:false, say you don't have "
     "verified contact details for that department and offer the general contact it returns instead.\n"
     "- If they choose an alternative, continue normally (place_order with the alternative, or the earliest date).\n\n"
+    "Hotel inventory and standing orders:\n"
+    "- You manage the hotel's inventory and budgets. If the user asks 'What do we need to order?', 'Check our "
+    "stock', or 'Restock our weekly items', use the `check_inventory_levels` tool. If items are low, propose an "
+    "order. Ensure you do not exceed the weekly or monthly spending limits.\n"
+    "- check_inventory_levels returns each standing-order item with on_hand stock (estimated from the last stock "
+    "count, deliveries and expected usage), par_level, target_level, days_of_cover, what is already incoming or "
+    "awaiting approval, suggested_qty (already capped by the item's weekly/monthly unit limits and the hotel's "
+    "weekly/monthly budget: capped_by says which) and the estimated cost at live prices. Report only these numbers; "
+    "never order more than suggested_qty and never exceed a limit or the budget.\n"
+    "- To restock, call `restock_inventory` (no arguments) only after the manager said yes (e.g. 'yes, restock', "
+    "'order them', 'restock our weekly items'). It prepares the restock for the manager's confirmation; never "
+    "claim it was ordered until a tool result says status 'done'. For one specific product the manager names, "
+    "use place_order instead.\n"
+    "- If nothing is low, say the inventory is healthy (mention the item with the fewest days of cover).\n\n"
     "You also have full access to the dashboard state. "
     "If the manager asks 'What orders are pending?', read the pending orders from the context. "
     "If they ask to explain the dashboard, summarize the total spend, active agents, and recent decisions. "
@@ -182,6 +198,21 @@ STYLE = {
 UI_ELEMENTS = ["pending_approvals", "spend_chart", "trust_levels", "order_decisions", "recent_orders", "audit_trail"]
 
 TOOL_DECLARATIONS: list[dict[str, Any]] = [
+    {
+        "name": "check_inventory_levels",
+        "description": ("The hotel's standing-order inventory: current stock of each recurring item vs its par level, "
+                        "what needs restocking, and the quantities to order without exceeding the weekly / monthly "
+                        "unit limits and spending budget (live prices). Use for 'What do we need to order?', "
+                        "'Check our stock', 'Restock our weekly items', 'Are we low on anything?'."),
+        "parameters": {"type": "object", "properties": {"reason": {"type": "string", "description": "What the manager asked, in a few words (optional)"}}},
+    },
+    {
+        "name": "restock_inventory",
+        "description": ("Prepare a restock of ALL low standing-order items (the quantities check_inventory_levels "
+                        "suggests, within limits and budget) for the manager to confirm. Each line goes through the "
+                        "guardrails. Only after the manager agreed to restock."),
+        "parameters": {"type": "object", "properties": {"reason": {"type": "string", "description": "What the manager asked, in a few words (optional)"}}},
+    },
     {
         "name": "get_contact_info",
         "description": ("Verified contact details (department name, e-mail, phone numbers per language) for the "
@@ -469,6 +500,22 @@ def _fallback_text(actions: list[dict[str, Any]]) -> str:
             names = [f"{x['name']} ({x['product_id']})" for x in r.get("results", [])]
             parts.append(f"I found {len(names)} product(s) for '{r.get('query')}': " + "; ".join(names) + "." if names
                          else f"I found no products for '{r.get('query')}'.")
+        elif a["tool"] == "get_contact_info":
+            if r.get("error") == "ASK_FIRST":
+                parts.append("I'm afraid that isn't something I can arrange. Would you like to contact Valio Aimo "
+                             "Sales Service, or choose an available alternative?")
+            else:
+                c = r if r.get("verified") else (r.get("general_contact") or {})
+                if c.get("department"):
+                    phones = ", ".join(f"{p['number']} ({p['language']})" for p in c.get("phones") or [])
+                    parts.append((r.get("note") + " " if r.get("note") else "")
+                                 + f"You can contact {c['department']}: {c.get('email')}" + (f", phone {phones}" if phones else "") + ".")
+        elif a["tool"] == "check_inventory_levels" and r.get("ok"):
+            low = r.get("low_items") or []
+            parts.append(("Inventory is healthy: every standing item is above par." if not low else
+                          f"Below par: {', '.join(low)}."
+                          + (f" Suggested restock ≈€{r['estimated_restock_total_eur']:,.2f} within the limits and budget."
+                             if r.get("estimated_restock_total_eur") else "")))
         else:
             parts.append(r.get("message") or r.get("error") or "")
     return " ".join(p for p in parts if p).strip()
