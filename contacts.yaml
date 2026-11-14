@@ -1,0 +1,23 @@
+# Verified contact details the AI assistant may give to customers.
+#
+# Add ONLY details you have verified with the department itself. The assistant gives out nothing
+# else: any e-mail address or phone number in its answers that is not listed here is removed
+# before the answer is shown, and the verified details below are shown instead.
+#
+# topics = what the department handles. A request on a topic no department lists gets an honest
+# "I don't have verified contact details for that" plus the `default` department as the general
+# point of contact.
+
+default: sales_service
+
+departments:
+  sales_service:
+    name: Valio Aimo Sales Service
+    topics: [orders]          # order-related: placing/changing orders, delivery dates and times,
+                              # product availability, special arrangements for an order
+    email: myyntipalvelu@valio.fi
+    phones:
+      - language: Finnish
+        number: "010 381 190"
+      - language: Swedish
+        number: "010 381 197"

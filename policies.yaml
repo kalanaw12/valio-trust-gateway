@@ -1,0 +1,183 @@
+# =============================================================================
+# Valio Aimo Agent Gateway — Policy-as-Code
+# -----------------------------------------------------------------------------
+# Evaluated deterministically by src/guardrails.py. The same order + the same
+# policy version ALWAYS yields the same decision. The policy hash is stamped
+# into every signed quote and every audit entry, so a decision can be replayed.
+#
+# Decision precedence: REJECTED > PENDING_APPROVAL > AUTO_APPROVED
+# =============================================================================
+
+policy_version: "2026.11.0"
+
+# -----------------------------------------------------------------------------
+# Spend controls (values in EUR, excluding VAT unless stated)
+# -----------------------------------------------------------------------------
+spend:
+  currency: EUR
+  max_autonomous_spend: 500          # above this -> PENDING_APPROVAL
+  hard_cap_per_order: 25000          # above this -> REJECTED (never orderable by an agent)
+  max_daily_autonomous_spend: 2000   # rolling 24h sum of AUTO_APPROVED orders per customer
+  max_line_value: 5000               # any single line above this -> PENDING_APPROVAL
+
+# -----------------------------------------------------------------------------
+# Price integrity — protects against stale quotes and price drift
+# -----------------------------------------------------------------------------
+pricing:
+  max_price_delta_pct: 10            # live re-price vs quoted price; above -> PENDING_APPROVAL
+  reject_price_delta_pct: 30         # above -> REJECTED
+  require_net_price: true            # netPriceFound == false -> PENDING_APPROVAL
+  reject_on_price_error: true        # API error flag on any line -> REJECTED
+
+# -----------------------------------------------------------------------------
+# Allergen safety
+#   strict   : CONTAINS and MAY_CONTAIN (traces) both conflict -> REJECTED
+#   standard : CONTAINS -> REJECTED, MAY_CONTAIN -> PENDING_APPROVAL
+#   off      : no allergen checks (not recommended)
+# Codes are GS1 AllergenTypeCodes as found in the product data
+# (see ALLERGEN_CODES in src/data_adapter.py). Note: "lactose intolerance" is
+# ML (lactose), NOT AM (milk protein). Lactose-free milk still contains AM.
+# -----------------------------------------------------------------------------
+allergens:
+  safety: strict
+  unknown_allergen_data: PENDING_APPROVAL   # product has no allergen declaration at all
+
+# -----------------------------------------------------------------------------
+# Quantity & logistics sanity checks
+# -----------------------------------------------------------------------------
+quantity:
+  enforce_lot_size: true             # qty must be a multiple of allowedLotSize -> else REJECTED
+  max_units_per_line: 10000          # above -> PENDING_APPROVAL (fat-finger guard)
+  allow_partial_availability: false  # availableAmount < requested -> PENDING_APPROVAL
+
+# -----------------------------------------------------------------------------
+# Quotes
+# -----------------------------------------------------------------------------
+quotes:
+  ttl_seconds: 900                   # signed quote validity window
+  require_valid_signature: true      # orders must reference an untampered quote
+
+# -----------------------------------------------------------------------------
+# Substitutions
+# -----------------------------------------------------------------------------
+substitution:
+  enabled: true
+  candidate_pool: 5                  # semantic neighbours considered (FAISS top-k)
+  max_alternatives: 3                # Good / Better / Best
+  substituted_lines_require_approval: true   # agent may propose, a human confirms
+  weights:                           # deterministic scoring; must sum to 1.0
+    price: 0.40
+    reliability: 0.35
+    carbon: 0.25
+  min_reliability: 0.80              # candidates below are dropped
+
+# -----------------------------------------------------------------------------
+# Sustainability
+# -----------------------------------------------------------------------------
+sustainability:
+  max_carbon_kg_co2e_per_kg: null    # e.g. 10.0 to block high-impact lines; null = off
+  flag_carbon_above: 8.0             # adds an explanatory reason, does not change status
+
+# -----------------------------------------------------------------------------
+# Agent trust levels (#3): autonomy is earned. score = approvals - penalty * rejections.
+# The level's spend limit replaces spend.max_autonomous_spend for that agent.
+# A per-agent max_autonomous_spend (below) acts as a floor, never a ceiling.
+# -----------------------------------------------------------------------------
+trust_levels:
+  rejection_penalty: 2
+  levels:
+    - { level: 1, name: Probation, min_score: 0,  max_autonomous_spend: 500 }
+    - { level: 2, name: Trusted,   min_score: 5,  max_autonomous_spend: 1000 }
+    - { level: 3, name: Partner,   min_score: 15, max_autonomous_spend: 2000 }
+
+# -----------------------------------------------------------------------------
+# Drift detection (#6): compare an order with the agent's own PLACED history
+# -----------------------------------------------------------------------------
+drift:
+  enabled: true
+  threshold_pct: 15            # > 15 % above the historical average -> DRIFT_DETECTED (approval)
+  min_history_orders: 3        # no baseline yet -> no drift flag (avoids noise on day one)
+  lookback_orders: 20
+
+# -----------------------------------------------------------------------------
+# Trust escalation (#1): a human approval can teach the gateway a NARROW rule
+# (same agent + customer + products, quantity/value bounded, expiring). A rule
+# can only waive the PENDING reasons listed here. REJECT-level findings
+# (allergens, bad signature, hard cap, extreme price moves) are never waivable.
+# -----------------------------------------------------------------------------
+trusted_rules:
+  enabled: true
+  auto_create_on_approval: true
+  quantity_tolerance_pct: 0    # rule covers up to the approved quantity
+  value_tolerance_pct: 10      # and up to +10 % of the approved order value
+  ttl_days: 30
+  # DAILY_LIMIT is deliberately NOT waivable: it caps how often a rule can fire per day.
+  waivable_codes: [SPEND_LIMIT, LINE_VALUE, SUBSTITUTED_LINE, NO_NET_PRICE,
+                   DRIFT_DETECTED, QUANTITY_UNUSUAL, PARTIAL_AVAILABILITY]
+
+# -----------------------------------------------------------------------------
+# Autonomous negotiation (SIMULATED counter-party: the challenge API has no
+# negotiation endpoint). Tried when a single-line order exceeds the agent's
+# autonomous limit by less than `max_over_budget_pct`. A won deal changes the
+# order (more units, lower unit price) and is re-checked by ALL guardrails, so it
+# can never bypass a spend limit. +20% qty at -10% = 1.08x spend: it goes to a human.
+# -----------------------------------------------------------------------------
+negotiation:
+  enabled: true
+  max_over_budget_pct: 20
+  quantity_uplift_pct: 20
+  discount_pct: 10
+  accept_min_qty: 100          # simulated Valio rule: accept when the new quantity is above this
+  # A won deal is auto-approved: ONLY the spend-limit check is waived, and only up to the negotiated total
+  # (capped at limit + max_negotiated_over_limit_pct). Daily cap, hard cap, allergens, drift and price checks
+  # still apply. Set to false to send every negotiated order to a human.
+  auto_approve_won: true
+  max_negotiated_over_limit_pct: 30   # +20% qty at -10% = 1.08 x (<=1.2 x limit) = up to ~1.30 x limit
+
+# -----------------------------------------------------------------------------
+# ROI reporting (dashboard "Total AI Value Generated"). Negotiation savings are
+# measured; error prevention is an ESTIMATE per order the guardrails rejected or
+# flagged for drift (waste / mis-orders avoided). Shown as "est." in the UI.
+# -----------------------------------------------------------------------------
+roi:
+  error_prevention_estimate_eur: 50
+
+# -----------------------------------------------------------------------------
+# Approval webhooks (#2): HMAC-SHA256 signed POST on every human/auto decision
+# URL / secret come from WEBHOOK_URL / WEBHOOK_SECRET env vars when set.
+# -----------------------------------------------------------------------------
+webhooks:
+  enabled: true
+  url: "http://127.0.0.1:8000/v1/webhooks/mock-receiver"
+  events: [order.approved, order.rejected, order.auto_approved]
+  timeout_seconds: 5
+  max_attempts: 3
+  signature_tolerance_seconds: 300
+
+# -----------------------------------------------------------------------------
+# Agent identities & scopes (least privilege). Keys are agent API keys' ids.
+# -----------------------------------------------------------------------------
+agents:
+  default:
+    scopes: [search, quote, order]
+    max_autonomous_spend: null       # null = inherit spend.max_autonomous_spend
+  hotel-procurement-bot:
+    scopes: [search, quote, order]
+    max_autonomous_spend: 750
+  read-only-analyst:
+    scopes: [search, quote]
+
+# -----------------------------------------------------------------------------
+# Buyer allergen profiles — selectable per order/quote via `buyer_profile`
+# -----------------------------------------------------------------------------
+buyer_profiles:
+  default:
+    excluded_allergens: []
+  lactose_intolerant:
+    excluded_allergens: [ML]
+  milk_allergy:
+    excluded_allergens: [AM, ML]
+  coeliac:
+    excluded_allergens: [AW, UW, GB, NR, GO, GS, GK]
+  nut_free_kitchen:
+    excluded_allergens: [AN, AP, SA, SH, SW, SC, SP, SR, ST, SM]

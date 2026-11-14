@@ -1,0 +1,9 @@
+.env
+.cache/
+__pycache__/
+audit_log.jsonl
+*.pyc
+examples/output/
+var/
+*.archived.jsonl
+*.jsonl.lock

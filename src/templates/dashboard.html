@@ -1,0 +1,2914 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Trust Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+  <script src="https://cdn.tailwindcss.com/3.4.5?plugins=typography"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: {
+        fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui'], display: ['"Plus Jakarta Sans"', 'Inter', 'ui-sans-serif'],
+                      mono: ['JetBrains Mono', 'ui-monospace', 'monospace'] },
+        colors: { ink: { 950: '#0a0e17', 900: '#0f1420', 850: '#141a28', 800: '#1a2133', 700: '#263048', 600: '#37425e' } },
+      } },
+    };
+  </script>
+  <style>
+    /* ---- Depth: soft colour glows behind everything, so the glass cards have something to blur ---- */
+    body {
+      background:
+        radial-gradient(1100px 620px at 8% -12%, rgba(56,189,248,.13), transparent 60%),
+        radial-gradient(900px 560px at 102% -4%, rgba(168,85,247,.13), transparent 58%),
+        radial-gradient(900px 700px at 55% 118%, rgba(34,197,94,.07), transparent 60%),
+        #0a0e17;
+      background-attachment: fixed;
+    }
+    h1, h2, h3 { font-family: "Plus Jakarta Sans", Inter, ui-sans-serif, system-ui; letter-spacing: -0.01em; }
+
+    /* ---- Glassmorphism cards ---- */
+    /* = backdrop-blur-lg bg-white/5 border border-white/10 shadow-[0_0_20px_rgba(0,0,0,0.5)] */
+    .card {
+      background: rgba(255,255,255,.05);
+      -webkit-backdrop-filter: blur(16px) saturate(140%);
+      backdrop-filter: blur(16px) saturate(140%);
+      border: 1px solid rgba(255,255,255,.10);
+      border-radius: 16px;
+      box-shadow: 0 0 20px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);
+      transition: transform .22s ease, border-color .22s ease, box-shadow .22s ease;
+    }
+    /* Cards lift instead of scaling: scaling blurs text and shifts layout */
+    /* (overlays are excluded: their transform holds centring + open/close animation) */
+    .card:not(#spotlight):not(.modal-panel):hover { transform: translateY(-2px); border-color: rgba(255,255,255,.18);
+                  box-shadow: 0 0 28px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.08); }
+
+    /* Pending approvals: pulsing yellow -> orange border so they draw the eye */
+    @keyframes pending-pulse {
+      0%, 100% { border-color: rgba(250,204,21,.45); box-shadow: 0 0 20px rgba(0,0,0,.5), 0 0 0 0 rgba(250,204,21,0); }
+      50%      { border-color: rgba(249,115,22,.95); box-shadow: 0 0 20px rgba(0,0,0,.5), 0 0 22px 2px rgba(249,115,22,.28); }
+    }
+    .card.pending-card { border-width: 1.5px; animation: pending-pulse 2.4s ease-in-out infinite; }
+
+    /* Toasts (bottom-left): slide in from the left, slide out */
+    @keyframes toast-in  { from { opacity: 0; transform: translateX(-24px) scale(.98); } to { opacity: 1; transform: none; } }
+    @keyframes toast-out { to { opacity: 0; transform: translateX(-24px) scale(.98); } }
+    .toast { animation: toast-in .28s cubic-bezier(.2,.8,.2,1) both; }
+    .toast.leaving { animation: toast-out .22s ease-in forwards; }
+    @keyframes toast-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+    /* ---- Terminal-style audit log ---- */
+    .terminal { background: #000; border: 1px solid rgba(34,197,94,.22); border-radius: 14px;
+                box-shadow: 0 0 20px rgba(0,0,0,.5), inset 0 0 40px rgba(34,197,94,.04);
+                font-family: "JetBrains Mono", ui-monospace, monospace; }
+    .terminal li { border-color: rgba(255,255,255,.06) !important; }
+    .term-ok   { color: #4ade80; }  .term-err { color: #f87171; }  .term-warn { color: #facc15; }
+    .term-info { color: #67e8f9; }  .term-dim { color: #6b7280; }
+    @keyframes neg-glow { 0%,100% { box-shadow: inset 0 0 0 1px rgba(74,222,128,.55), 0 0 14px rgba(74,222,128,.25); }
+                          50%     { box-shadow: inset 0 0 0 1px rgba(74,222,128,.95), 0 0 26px rgba(74,222,128,.45); } }
+    /* "Total AI Value Generated" card: same glowing green as a won negotiation */
+    .card.ai-value { border-color: rgba(74,222,128,.55); background: linear-gradient(135deg, rgba(34,197,94,.10), rgba(255,255,255,.04));
+                     animation: neg-glow 2.6s ease-in-out infinite; }
+    .neg-won { margin: 6px 8px; border-radius: 10px; background: rgba(34,197,94,.07); animation: neg-glow 2.6s ease-in-out infinite; }
+
+    /* ---- Skeleton loaders ---- */
+    @keyframes shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+    .skel { border-radius: 8px; background: linear-gradient(90deg, rgba(255,255,255,.05) 0%, rgba(255,255,255,.13) 40%, rgba(255,255,255,.05) 80%);
+            background-size: 800px 100%; animation: shimmer 1.4s linear infinite; }
+
+    /* ---- Live agent activity indicator ---- */
+    @keyframes live-ping { 0% { transform: scale(1); opacity: .8; } 100% { transform: scale(2.6); opacity: 0; } }
+    .live-ping { position: relative; }
+    .live-ping::after { content: ""; position: absolute; inset: 0; border-radius: 9999px; background: inherit; animation: live-ping 1.6s ease-out infinite; }
+    .live-flash { animation: live-flash .6s ease-out; }
+    @keyframes live-flash { 0% { box-shadow: 0 0 0 0 rgba(74,222,128,.7); } 100% { box-shadow: 0 0 0 10px rgba(74,222,128,0); } }
+
+    /* ---- Master full-screen AI overlay (login + Expand) ---- */
+    #ai-fullscreen-overlay { opacity: 0; transition: opacity .45s ease; }
+    #ai-fullscreen-overlay.ov-open { opacity: 1; }
+    #ai-fullscreen-overlay .ov-panel { transform: scale(.97); transition: transform .55s cubic-bezier(.2,.8,.2,1); }
+    #ai-fullscreen-overlay.ov-open .ov-panel { transform: none; }
+    #ai-fullscreen-overlay .ov-fade { opacity: 0; transform: translateY(10px);
+                                      transition: opacity .5s ease .12s, transform .6s cubic-bezier(.2,.8,.2,1) .12s; }
+    #ai-fullscreen-overlay.ov-open .ov-fade { opacity: 1; transform: none; }
+    #ai-fullscreen-overlay .ov-cap { opacity: 0; transform: translateX(-14px);
+                                     transition: opacity .45s ease, transform .55s cubic-bezier(.2,.8,.2,1), background-color .2s, border-color .2s; }
+    #ai-fullscreen-overlay.ov-open .ov-cap { opacity: 1; transform: none; }
+    /* the Gemini orb scales 0 -> 1 with a slight overshoot, and shrinks once a conversation is on screen */
+    #ov-orb { width: 8rem; height: 8rem; transform: scale(0);
+              transition: transform .7s cubic-bezier(.34,1.56,.64,1) .1s, width .5s ease, height .5s ease; }
+    #ov-orb svg { width: 4rem; height: 4rem; transition: width .5s ease, height .5s ease; }
+    #ai-fullscreen-overlay.ov-open #ov-orb { transform: scale(1); }
+    #ov-title { transition: font-size .4s ease; }
+    /* Layout. Mobile: one scrolling column (greeting, actions, conversation, charts, input).
+       Desktop: greeting upper-middle, actions upper-right, conversation under the greeting,
+       charts row + input bar along the bottom. */
+    #ov-top { display: grid; gap: 1.25rem; grid-template-columns: minmax(0, 1fr); }
+    #ov-log-slot { display: none; min-height: 0; }
+    #ov-log-slot > #chat-log { max-height: 55vh; }
+    @media (min-width: 1024px) {
+      #ov-top { flex: 1 1 0%; min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(0, 2.2fr) minmax(0, 1fr);
+                grid-template-rows: auto minmax(0, 1fr); }
+      #ov-main { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+      #ov-actions { grid-column: 3; grid-row: 1 / span 2; align-self: start; padding-top: 3.5rem; }
+      #ov-log-slot { grid-column: 2; grid-row: 2; }
+      #ov-log-slot > #chat-log { max-height: none; }
+      .ov-compact #ov-main { grid-row: 1; align-self: start; }
+    }
+    /* Compact charts row: the dashboard's own chart boxes are moved in here while the overlay is open */
+    #ov-charts .ov-chart { flex: 1 0 240px; }
+    #ov-charts .ov-chart-body { position: relative; height: 8.5rem; }
+    #ov-charts #deciders-box, #ov-charts #daily-box { height: 100%; max-width: none; margin: 0; }
+    #ov-charts #deciders-empty { padding: 2.75rem 0; }
+    #ov-charts #trust { height: 100%; margin-top: 0; overflow-y: auto; padding-right: .25rem; }
+    #ov-charts #trust > * + * { margin-top: .75rem; }
+    @media (min-width: 1024px) { .ov-compact #ov-charts .ov-chart-body { height: 6.5rem; } }
+    /* ---- Focus Mode: the AI brings a chart / list to a centre stage, the chat slides to the right ---- */
+    #ov-stage { display: none; transition: background-color .5s ease, border-color .5s ease, box-shadow .5s ease; }
+    #ov-stage.ov-stage-ghost { background-color: transparent; border-color: transparent; box-shadow: none; }
+    .ov-focus #ov-stage { display: flex; }
+    .ov-focus #ov-main, .ov-focus #ov-actions, .ov-focus #ov-charts { display: none; }
+    .ov-focus #ov-top { flex: 1 1 0%; min-height: 16rem; border: 1px solid rgba(255,255,255,.1); border-radius: 1rem;
+                        background: rgba(255,255,255,.04); padding: .75rem; backdrop-filter: blur(16px); }
+    .ov-focus #ov-log-slot { display: flex; flex-direction: column; }
+    #ov-stage-body > #daily-box, #ov-stage-body > #deciders-box { height: 100%; min-height: 18rem; max-width: none; margin: 0; }
+    #ov-stage-body > #deciders-empty { padding: 6rem 0; }
+    #ov-stage-body > #trust { margin-top: 0; max-width: 56rem; }
+    @media (max-width: 1023px) {
+      .ov-focus #ov-stage { order: -1; min-height: 65vh; }
+      .ov-focus #ov-log-slot > #chat-log { max-height: 45vh; }
+    }
+    @media (min-width: 1024px) {
+      .ov-focus .ov-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+                            grid-template-rows: minmax(0, 1fr) auto; column-gap: 1.5rem; row-gap: .75rem; }
+      .ov-focus #ov-stage { grid-column: 1; grid-row: 1 / span 2; min-height: 0; }
+      .ov-focus #ov-top { grid-column: 2; grid-row: 1; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+      .ov-focus #ov-log-slot { grid-column: 1; grid-row: 1; }
+      .ov-focus #ov-inputbar { grid-column: 2; grid-row: 2; max-width: none; }
+    }
+    @keyframes ov-item-in { from { opacity: 0; transform: translateY(10px); } }
+    .ov-item { animation: ov-item-in .45s cubic-bezier(.2,.8,.2,1) both; }
+    @media (prefers-reduced-motion: reduce) { .ov-item { animation: none; } }
+    .ov-compact #ov-orb { width: 3.5rem; height: 3.5rem; }
+    .ov-compact #ov-orb svg { width: 1.9rem; height: 1.9rem; }
+    .ov-compact #ov-kicker { display: none; }
+    .ov-compact #ov-title { font-size: 1.05rem; min-height: 0; margin-top: .6rem; }
+    .ov-compact #ov-log-slot { display: flex; flex-direction: column; }
+    #ov-log-slot > #chat-log { flex: 1 1 0%; padding-left: 0; padding-right: 0; }
+    #ov-log-slot > #voice-status { border-radius: .75rem; }
+    #app.app-hidden { opacity: 0; pointer-events: none; }
+
+    /* ---- Waveform: static when idle, bouncing while listening or speaking ---- */
+    .wave { display: flex; align-items: center; justify-content: center; gap: 3px; height: 30px; }
+    .wave span { display: block; width: 3px; height: 4px; border-radius: 3px; background: linear-gradient(180deg, #60a5fa, #c084fc);
+                 opacity: .45; transition: height .35s ease, opacity .35s ease; }
+    .wave.active span { opacity: 1; animation: wave-bounce 1.05s ease-in-out infinite; animation-delay: var(--d); }
+    @keyframes wave-bounce { 0%, 100% { height: 4px; } 50% { height: var(--h); } }
+
+    #app.chat-full-blur { filter: blur(6px); pointer-events: none; user-select: none; }
+
+    /* ---- Spatial AI: dashboard blur + spotlight ---- */
+    #app { transition: opacity .6s ease, filter .45s ease; }
+    .dashboard-blur { filter: blur(8px); pointer-events: none; transition: filter 0.4s ease; user-select: none; }
+    #spotlight { will-change: transform, opacity;
+                 transition: opacity .3s ease, transform .3s cubic-bezier(.2,.8,.2,1), right .3s ease !important; }
+
+    /* Modals */
+    .modal-root { transition: opacity .2s ease; }
+    .modal-root .modal-panel { transition: transform .22s cubic-bezier(.2,.8,.2,1), opacity .22s ease; }
+    .modal-root[data-state="closed"] { opacity: 0; }
+    .modal-root[data-state="closed"] .modal-panel { transform: translateY(12px) scale(.98); opacity: 0; }
+
+    /* ---- Buttons: subtle grow on hover, press-in on click ---- */
+    button { transition: transform .15s ease, background-color .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease; }
+    button:not(:disabled):not(.switch):hover { transform: scale(1.02); }
+    button:not(:disabled):not(.switch):active { transform: scale(.97); }
+    button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid #818cf8; outline-offset: 2px; }
+
+    /* ---- Login greeting ---- */
+    #greet { transition: opacity .5s ease; opacity: 0; }
+    #greet.greet-in { opacity: 1; }
+    #greet-orb { position: fixed; left: 50%; top: 38%; width: 128px; height: 128px; margin: -64px 0 0 -64px; z-index: 61;
+                 border-radius: 9999px; display: grid; place-items: center; background: #0f1420;
+                 border: 1px solid rgba(129,140,248,.35); will-change: transform, opacity; }
+    #greet-orb .orb-aura { position: absolute; inset: -30px; border-radius: 9999px; pointer-events: none;
+                 background: radial-gradient(circle, rgba(96,165,250,.45) 0%, rgba(168,85,247,.30) 40%, transparent 70%);
+                 filter: blur(14px); animation: orb-breathe 2.2s ease-in-out infinite; }
+    #greet-orb svg { width: 64px; height: 64px; position: relative; animation: orb-spark 2.2s ease-in-out infinite; }
+    @keyframes orb-breathe { 0%,100% { transform: scale(.9); opacity: .75 } 50% { transform: scale(1.12); opacity: 1 } }
+    @keyframes orb-spark { 0%,100% { transform: scale(.94) rotate(0deg) } 50% { transform: scale(1.06) rotate(45deg) } }
+    .greet-caret::after { content: ""; display: inline-block; width: 2px; height: 1.05em; margin-left: 3px; vertical-align: -0.15em;
+                          background: #a5b4fc; animation: caret 1s steps(1) infinite; }
+    @keyframes caret { 50% { opacity: 0 } }
+    @keyframes fab-land { 0% { transform: scale(1.25) } 55% { transform: scale(.92) } 100% { transform: scale(1) } }
+    .fab-land { animation: fab-land .45s ease-out; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+      .card:hover, button:hover { transform: none !important; }
+    }
+    /* grid/flex children may shrink below their content width (otherwise long ids/tables widen the page on phones) */
+    #app .grid > *, #app .flex > .min-w-0 { min-width: 0; }
+    #ov-charts #trust { scrollbar-width: thin; scrollbar-color: #263048 transparent; }
+    .scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+    .scrollbar::-webkit-scrollbar-thumb { background: #263048; border-radius: 8px; }
+    @keyframes fade-in { from { opacity: 0; transform: translateY(-8px); background-color: rgba(56,189,248,.14); }
+                         60% { background-color: rgba(56,189,248,.10); }
+                         to { opacity: 1; transform: none; background-color: transparent; } }
+    .fade-in { animation: fade-in 1.4s ease-out; }
+    @keyframes pulse-dot { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+    .live-dot { animation: pulse-dot 2s ease-in-out infinite; }
+    .md details { border: 1px solid #263048; border-radius: 8px; padding: .35rem .75rem; margin: .5rem 0 1rem; }
+    .md summary { cursor: pointer; color: #94a3b8; font-size: .8rem; }
+    .md pre { max-height: 360px; overflow: auto; font-size: .75rem; }
+    .md table { font-size: .8rem; }
+    .chat-glow { box-shadow: 0 0 0 1px rgba(129,140,248,.25), 0 0 22px 4px rgba(96,165,250,.35), 0 0 44px 10px rgba(192,132,252,.22); }
+    .chat-glow:hover { box-shadow: 0 0 0 1px rgba(129,140,248,.45), 0 0 28px 6px rgba(96,165,250,.5), 0 0 56px 14px rgba(192,132,252,.3); }
+    @keyframes mic-pulse { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,.75); } 70% { box-shadow: 0 0 0 18px rgba(239,68,68,0); }
+                           100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); } }
+    .mic-btn.mic-live { background: #dc2626; border-color: #f87171; color: #fff; animation: mic-pulse 1.2s ease-out infinite; }
+    .mic-btn.mic-live.mic-paused { background: #92400e; border-color: #f59e0b; color: #fde68a; animation: none; }
+    [data-listen-pill].listen-paused { color: #fde68a; }
+    [data-listen-pill].listen-paused .animate-ping { display: none; }
+    [data-listen-pill].listen-paused .bg-rose-500 { background: #f59e0b; }
+    .chat-glow-soft { box-shadow: 0 20px 60px -10px rgba(0,0,0,.6), 0 0 40px -4px rgba(129,140,248,.25); }
+    @keyframes spark-pulse { 0%,100% { transform: scale(.85) rotate(0deg); opacity: .6 } 50% { transform: scale(1.1) rotate(45deg); opacity: 1 } }
+    .spark-pulse { animation: spark-pulse 1.4s ease-in-out infinite; transform-origin: center; }
+    .chat-md p { margin: .35rem 0; } .chat-md ul { list-style: disc; padding-left: 1.1rem; margin: .35rem 0; }
+    .chat-md ol { list-style: decimal; padding-left: 1.2rem; } .chat-md code { color: #93c5fd; font-size: .78rem; }
+    .chat-md strong { color: #fff; }
+    .switch { width: 34px; height: 20px; border-radius: 999px; background: #263048; position: relative; transition: background .2s; }
+    .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 999px; background: #cbd5e1; transition: transform .2s; }
+    .switch[aria-checked="true"] { background: #0284c7; }
+    .switch[aria-checked="true"]::after { transform: translateX(14px); background: #fff; }
+  </style>
+</head>
+<body class="h-full font-sans text-slate-200 antialiased">
+
+<!-- =================================================================== LOGIN -->
+<section id="login" class="hidden min-h-full items-center justify-center px-4 py-12">
+  <div class="w-full max-w-sm">
+    <div class="mb-6 flex items-center gap-3">
+      <div class="grid h-10 w-10 place-items-center rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 font-bold text-white">VA</div>
+      <div>
+        <h1 class="font-semibold text-white">Valio Aimo – Agent Trust Dashboard</h1>
+        <p class="text-xs text-slate-400">Sign in to supervise autonomous purchasing</p>
+      </div>
+    </div>
+    <form id="login-form" class="card space-y-4 p-6">
+      <div class="grid grid-cols-2 gap-1 rounded-lg bg-ink-850 p-1 text-sm" role="tablist">
+        <button type="button" data-role-tab="manager" class="rounded-md px-3 py-2 font-medium">Manager</button>
+        <button type="button" data-role-tab="auditor" class="rounded-md px-3 py-2 font-medium">Auditor</button>
+      </div>
+      <p id="role-hint" class="text-xs text-slate-400"></p>
+      <label class="block text-xs text-slate-400">Username
+        <input id="login-user" autocomplete="username" required
+               class="mt-1 w-full rounded-md border border-ink-600 bg-ink-900 px-3 py-2 text-sm text-white focus:border-sky-500 focus:outline-none">
+      </label>
+      <label class="block text-xs text-slate-400">Password
+        <input id="login-pass" type="password" autocomplete="current-password" required
+               class="mt-1 w-full rounded-md border border-ink-600 bg-ink-900 px-3 py-2 text-sm text-white focus:border-sky-500 focus:outline-none">
+      </label>
+      <p id="login-error" class="hidden text-sm text-rose-400"></p>
+      <button id="login-submit" class="w-full rounded-md bg-sky-600 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-60">Sign in</button>
+      <p id="demo-creds" class="hidden text-center text-[11px] text-slate-500">Local demo: manager / manager123 · auditor / auditor123</p>
+    </form>
+  </div>
+</section>
+
+<!-- =================================================================== APP -->
+<div id="app" class="hidden">
+  <header class="sticky top-0 z-30 border-b border-ink-700/70 bg-ink-950/85 backdrop-blur">
+    <div class="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3 sm:px-6">
+      <div class="flex items-center gap-3">
+        <div class="grid h-9 w-9 place-items-center rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 text-sm font-bold text-white">VA</div>
+        <div>
+          <h1 class="text-[15px] font-semibold leading-tight text-white">Valio Aimo – Agent Trust Dashboard</h1>
+          <p class="text-xs text-slate-400">Traceability &amp; explainability for autonomous purchasing</p>
+        </div>
+      </div>
+      <div id="ws-status" class="flex items-center gap-2 rounded-full border border-ink-700 bg-ink-900 px-3 py-1 text-xs"></div>
+      <div id="gw-pills" class="hidden flex-wrap items-center gap-2 text-xs md:flex"></div>
+      <div class="ml-auto flex items-center gap-3">
+        <div class="text-right">
+          <p id="who" class="text-sm font-medium text-white"></p>
+          <p id="who-role" class="text-[11px]"></p>
+        </div>
+        <button id="btn-logout" class="rounded-md border border-ink-600 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-ink-800">Logout</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-[1400px] space-y-6 px-4 py-6 sm:px-6">
+    <div id="auditor-banner" class="hidden rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-200">
+      Auditor mode: read-only. You can inspect every decision and audit trail, but approvals are disabled.
+    </div>
+
+    <!-- ============================================================ METRICS -->
+    <section id="tiles" class="grid grid-cols-2 gap-3 md:grid-cols-4"></section>
+
+    <section class="grid gap-4 lg:grid-cols-12">
+      <div class="card p-4 lg:col-span-3">
+        <h2 class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Order decisions</h2>
+        <p class="text-[11px] text-slate-500">final outcome per order · pending excluded</p>
+        <div id="deciders-box" class="relative mx-auto mt-2 h-48 max-w-[220px]"><canvas id="chart-deciders" aria-label="Auto-approved, human approved and rejected orders"></canvas><div data-chart-skel class="absolute inset-0 grid place-items-center"><div class="skel h-40 w-40 !rounded-full"></div></div></div>
+        <p id="deciders-empty" class="hidden py-14 text-center text-xs text-slate-500">No decided orders yet</p>
+      </div>
+      <div class="card p-4 lg:col-span-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Placed spend per day</h2>
+          <button data-expand="spend" title="Expand chart with AI analytics" aria-label="Expand spend chart"
+                  class="grid h-7 w-7 place-items-center rounded-md border border-white/10 text-slate-400 hover:bg-white/10 hover:text-white">
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+          </button>
+        </div>
+        <div id="daily-box" class="relative mt-3 h-48"><canvas id="chart-daily" aria-label="Daily placed spend"></canvas><div data-chart-skel class="absolute inset-0 flex items-end gap-3 px-2 pb-1"><div class="skel flex-1" style="height:45%"></div><div class="skel flex-1" style="height:70%"></div><div class="skel flex-1" style="height:35%"></div><div class="skel flex-1" style="height:85%"></div><div class="skel flex-1" style="height:55%"></div><div class="skel flex-1" style="height:65%"></div><div class="skel flex-1" style="height:40%"></div></div></div>
+      </div>
+      <div class="card p-4 lg:col-span-5">
+        <div class="flex items-center justify-between">
+          <h2 class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Agent trust levels</h2>
+          <div class="flex items-center gap-2">
+            <span class="hidden text-[11px] text-slate-500 sm:inline">score = approvals − 2 × rejections</span>
+            <button data-expand="trust" title="Expand chart with AI analytics" aria-label="Expand trust levels chart"
+                    class="grid h-7 w-7 place-items-center rounded-md border border-white/10 text-slate-400 hover:bg-white/10 hover:text-white">
+              <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+            </button>
+          </div>
+        </div>
+        <div id="trust" class="mt-3 space-y-4"></div>
+      </div>
+    </section>
+
+    <!-- ============================================================ MAIN GRID -->
+    <div class="grid gap-6 lg:grid-cols-12">
+      <!-- Pending approvals -->
+      <section class="lg:col-span-7">
+        <div class="mb-3">
+          <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">Pending Human Approvals</h2>
+          <p class="text-xs text-slate-500">Escalated by the guardrails. <b class="text-slate-400">Approve &amp; Remember</b> teaches a narrow, expiring rule so identical orders auto-approve next time.</p>
+        </div>
+        <div id="pending" class="space-y-4"></div>
+      </section>
+
+      <!-- Right column -->
+      <aside class="space-y-6 lg:col-span-5">
+        <section>
+          <div class="mb-3 flex items-end justify-between">
+            <div class="flex items-baseline gap-2">
+              <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">Proactive Offers</h2>
+              <span class="text-[11px] text-slate-500">pushed by Valio Aimo · signed</span>
+            </div>
+            <button id="offers-history" type="button" aria-pressed="false"
+                    class="rounded-full border border-white/10 px-2.5 py-0.5 text-[11px] text-slate-400 hover:bg-white/10 hover:text-white">Show history</button>
+          </div>
+          <div id="offers" class="card scrollbar max-h-56 divide-y divide-ink-800 overflow-auto"></div>
+        </section>
+
+        <section>
+          <div class="mb-3 flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">Live Audit Trail</h2>
+              <p id="chain" class="text-xs text-slate-500"></p>
+            </div>
+            <div class="flex items-center gap-3">
+              <label class="flex cursor-pointer items-center gap-2 text-xs text-slate-300">
+                <button id="toggle-explain" class="switch" role="switch" aria-checked="true" aria-label="Show explainability"></button>
+                Explainability
+              </label>
+              <button id="btn-verify" class="rounded-md border border-ink-600 px-2.5 py-1 text-xs text-slate-300 hover:bg-ink-800">Verify chain</button>
+            </div>
+          </div>
+          <div class="terminal overflow-hidden">
+            <div class="flex items-center gap-2 border-b border-green-500/15 bg-black px-4 py-2 font-mono text-[11px] text-green-500/70">
+              <span class="h-2.5 w-2.5 rounded-full bg-red-500/80"></span><span class="h-2.5 w-2.5 rounded-full bg-yellow-400/80"></span><span class="h-2.5 w-2.5 rounded-full bg-green-500/80"></span>
+              <span class="ml-2 truncate">valio-gateway:~$ tail -f audit_log.jsonl --purchasing</span>
+            </div>
+            <ol id="audit" class="scrollbar max-h-[720px] divide-y overflow-auto bg-black font-mono"></ol>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </main>
+</div>
+
+<!-- =================================================================== AUDIT DRAWER -->
+<div id="drawer" class="fixed inset-0 z-40 hidden" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+  <div id="drawer-backdrop" class="absolute inset-0 bg-black/60"></div>
+  <div class="absolute inset-y-0 right-0 flex w-full max-w-3xl flex-col border-l border-ink-700 bg-ink-900 shadow-2xl">
+    <div class="flex items-center justify-between gap-3 border-b border-ink-700 px-5 py-3">
+      <div><p class="text-[11px] uppercase tracking-wider text-slate-500">Hash-chained audit trail</p>
+        <h3 id="drawer-title" class="font-mono text-sm text-white"></h3></div>
+      <div class="flex gap-2">
+        <button id="drawer-download" class="rounded-md border border-ink-600 px-3 py-1.5 text-xs text-slate-300 hover:bg-ink-800">Download .md</button>
+        <button id="drawer-close" class="rounded-md border border-ink-600 px-3 py-1.5 text-xs text-slate-300 hover:bg-ink-800">Close</button>
+      </div>
+    </div>
+    <div id="drawer-body" class="scrollbar md prose prose-invert prose-sm max-w-none flex-1 overflow-auto px-6 py-5
+         prose-headings:text-white prose-code:text-sky-300 prose-code:before:content-none prose-code:after:content-none"></div>
+  </div>
+</div>
+
+<!-- Toasts: bottom-left, newest at the bottom -->
+<div id="toasts" class="pointer-events-none fixed bottom-4 left-4 z-[110] flex w-[min(92vw,360px)] flex-col gap-2" aria-live="polite" aria-atomic="false"></div>
+
+<!-- Generic modal (confirmations + expanded charts). Built by openModal() -->
+<div id="modal" class="modal-root fixed inset-0 z-[105] hidden items-center justify-center p-4" data-state="closed" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div data-modal-backdrop class="absolute inset-0 bg-ink-950/70 backdrop-blur-md"></div>
+  <div id="modal-panel" class="modal-panel card relative flex max-h-[90vh] w-full flex-col overflow-hidden !bg-ink-900/85" style="max-width:520px">
+    <div class="flex items-start justify-between gap-3 border-b border-white/10 px-5 py-4">
+      <div class="min-w-0"><p id="modal-kicker" class="text-[11px] font-semibold uppercase tracking-wider text-slate-400"></p>
+        <h3 id="modal-title" class="mt-0.5 text-lg font-semibold text-white"></h3></div>
+      <button data-modal-close class="rounded-md px-2 py-1 text-slate-400 hover:bg-white/10 hover:text-white" aria-label="Close">✕</button>
+    </div>
+    <div id="modal-body" class="scrollbar min-h-0 flex-1 overflow-auto px-5 py-4"></div>
+    <div id="modal-actions" class="flex flex-wrap justify-end gap-2 border-t border-white/10 px-5 py-3"></div>
+  </div>
+</div>
+
+<!-- =================================================================== AUDITOR CHAT (Gemini) -->
+<svg width="0" height="0" class="absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="spark-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#60a5fa"/><stop offset="55%" stop-color="#818cf8"/><stop offset="100%" stop-color="#c084fc"/>
+    </linearGradient>
+    <!-- Generic four-point sparkle (an AI-assist motif), not Google's trademarked logo -->
+    <symbol id="sparkle" viewBox="0 0 24 24">
+      <path fill="url(#spark-grad)" d="M12 1.5c.5 5.6 4.9 10 10.5 10.5-5.6.5-10 4.9-10.5 10.5C11.5 16.9 7.1 12.5 1.5 12 7.1 11.5 11.5 7.1 12 1.5z"/>
+    </symbol>
+  </defs>
+</svg>
+
+<!-- =================================================================== MASTER FULL-SCREEN AI OVERLAY -->
+<!-- Shown after login and by the chat widget's Expand button. The chat's message list (#chat-log) is
+     MOVED in here while it is open, so the widget and the overlay always show the very same history. -->
+<div id="ai-fullscreen-overlay" class="fixed inset-0 z-[100] hidden" role="dialog" aria-modal="true" aria-labelledby="ov-title">
+  <div class="absolute inset-0 bg-ink-950/75 backdrop-blur-xl"
+       style="background-image: radial-gradient(900px 520px at 70% 30%, rgba(99,102,241,.22), transparent 60%), radial-gradient(700px 500px at 15% 85%, rgba(34,197,94,.10), transparent 60%);"></div>
+  <button id="ov-minimize" type="button" title="Minimize to the dashboard" aria-label="Minimize to the dashboard"
+          class="ov-fade absolute right-4 top-4 z-10 grid h-10 w-10 place-items-center rounded-full border border-white/15 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white">
+    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>
+  </button>
+  <div class="ov-panel scrollbar relative mx-auto flex h-full max-w-7xl flex-col gap-5 overflow-y-auto px-4 pb-0 pt-16 sm:px-6 lg:overflow-hidden lg:pb-5 lg:pt-8">
+    <!-- Focus Mode stage: Gemini's focus_ui_element puts the real chart (moved, not copied) or a list here -->
+    <section id="ov-stage" class="min-h-0 flex-col rounded-3xl border border-white/10 bg-white/5 p-4 shadow-[0_0_40px_rgba(99,102,241,0.15)] backdrop-blur-lg sm:p-6" aria-live="polite" aria-labelledby="ov-stage-title">
+      <div id="ov-stage-head">
+        <button id="ov-stage-back" type="button"
+                class="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3.5 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-indigo-400/50 hover:bg-white/10 hover:text-white">
+          <span aria-hidden="true">←</span> Back to Chat</button>
+        <div class="mt-4 flex items-start gap-3">
+          <svg class="mt-1 h-6 w-6 shrink-0" aria-hidden="true"><use href="#sparkle"/></svg>
+          <div class="min-w-0 flex-1">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-indigo-300/80">AI Assistant is showing you</p>
+            <h3 id="ov-stage-title" class="mt-1 font-display text-xl font-semibold tracking-tight text-white sm:text-2xl"></h3>
+          </div>
+        </div>
+        <div id="ov-stage-explain" class="mt-3 flex items-start gap-3 rounded-xl border border-violet-400/20 bg-violet-500/[0.07] px-4 py-3">
+          <p id="ov-stage-text" class="min-w-0 flex-1 text-sm leading-relaxed text-violet-50"></p>
+          <button id="ov-stage-replay" type="button" title="Read the explanation aloud" aria-label="Read the explanation aloud"
+                  class="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/10 text-base hover:bg-white/10">🔊</button>
+        </div>
+      </div>
+      <div id="ov-stage-body" class="scrollbar mt-4 min-h-0 flex-1 overflow-auto"></div>
+    </section>
+    <div id="ov-top">
+      <!-- Upper-middle: the assistant (primary focus) -->
+      <section id="ov-main" class="flex min-h-0 flex-col items-center text-center">
+        <div id="ov-hero" class="flex flex-col items-center">
+          <div id="ov-orb" class="chat-glow relative grid shrink-0 place-items-center rounded-full border border-indigo-400/40 bg-ink-900">
+            <span class="pointer-events-none absolute -inset-8 rounded-full" style="background: radial-gradient(circle, rgba(96,165,250,.45), rgba(168,85,247,.3) 40%, transparent 70%); filter: blur(14px);"></span>
+            <svg class="relative"><use href="#sparkle"/></svg>
+          </div>
+          <p id="ov-kicker" class="ov-fade mt-8 text-[11px] font-semibold uppercase tracking-[0.28em] text-indigo-300/80">Valio Aimo · AI Assistant</p>
+          <h2 id="ov-title" class="ov-fade mt-3 min-h-[5.5rem] max-w-2xl font-display text-2xl font-semibold leading-snug tracking-tight text-white sm:text-[2rem] sm:leading-tight" aria-live="polite"></h2>
+        </div>
+      </section>
+      <!-- Upper-right: quick actions (stack below the greeting on mobile) -->
+      <aside id="ov-actions" class="min-w-0" aria-label="Quick actions">
+        <p class="ov-fade mb-2.5 text-[11px] font-semibold uppercase tracking-[0.25em] text-indigo-300/80">Quick actions</p>
+        <ul class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1">
+          <li><button data-ovcap="dashboard" class="ov-cap flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-left backdrop-blur-lg hover:border-indigo-400/40 hover:bg-white/10" style="transition-delay:.18s">
+            <span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-sky-500/15 text-base">📊</span><span class="min-w-0"><b class="block truncate text-[13px] font-medium text-white">Show the full dashboard</b><span class="block truncate text-[11px] text-slate-400">Metrics, charts, live activity</span></span></button></li>
+          <li><button data-ovcap="order" class="ov-cap flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-left backdrop-blur-lg hover:border-indigo-400/40 hover:bg-white/10" style="transition-delay:.24s">
+            <span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-emerald-500/15 text-base">🛒</span><span class="min-w-0"><b class="block truncate text-[13px] font-medium text-white">Place an order</b><span class="block truncate text-[11px] text-slate-400">"Big event tomorrow, 500 L of milk"</span></span></button></li>
+          <li><button data-ovcap="approvals" class="ov-cap flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-left backdrop-blur-lg hover:border-indigo-400/40 hover:bg-white/10" style="transition-delay:.30s">
+            <span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-amber-500/15 text-base">⏳</span><span class="min-w-0"><b class="block truncate text-[13px] font-medium text-white">Show what needs approval</b><span class="block truncate text-[11px] text-slate-400">Orders waiting for a human</span></span></button></li>
+          <li><button data-ovcap="charts" class="ov-cap flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-left backdrop-blur-lg hover:border-indigo-400/40 hover:bg-white/10" style="transition-delay:.36s">
+            <span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-violet-500/15 text-base">📈</span><span class="min-w-0"><b class="block truncate text-[13px] font-medium text-white">Explain the charts</b><span class="block truncate text-[11px] text-slate-400">Spend trends with AI analytics</span></span></button></li>
+          <li><button data-ovcap="offers" class="ov-cap flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-left backdrop-blur-lg hover:border-indigo-400/40 hover:bg-white/10" style="transition-delay:.42s">
+            <span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-fuchsia-500/15 text-base">🤝</span><span class="min-w-0"><b class="block truncate text-[13px] font-medium text-white">Review proactive offers</b><span class="block truncate text-[11px] text-slate-400">Valio surplus deals to negotiate</span></span></button></li>
+        </ul>
+      </aside>
+      <!-- The shared conversation (moved in from the widget), under the greeting -->
+      <div id="ov-log-slot" class="ov-fade w-full text-left"></div>
+    </div>
+
+    <!-- Middle: compact row of the dashboard's existing charts -->
+    <div id="ov-charts" class="ov-fade scrollbar mx-auto flex w-full max-w-5xl shrink-0 flex-row gap-3 overflow-x-auto pb-1" aria-label="Dashboard at a glance">
+      <div class="ov-chart rounded-2xl border border-white/10 bg-white/5 p-3 backdrop-blur-lg">
+        <p class="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Orders</p>
+        <div class="ov-chart-body" data-ovslot="orders"></div>
+      </div>
+      <div class="ov-chart rounded-2xl border border-white/10 bg-white/5 p-3 backdrop-blur-lg">
+        <div class="mb-1.5 flex items-center justify-between">
+          <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Spend</p>
+          <button data-expand="spend" class="text-[10px] text-slate-500 hover:text-white" title="Expand with AI analytics">Expand ↗</button>
+        </div>
+        <div class="ov-chart-body" data-ovslot="spend"></div>
+      </div>
+      <div class="ov-chart rounded-2xl border border-white/10 bg-white/5 p-3 backdrop-blur-lg">
+        <div class="mb-1.5 flex items-center justify-between">
+          <p class="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Trust</p>
+          <button data-expand="trust" class="text-[10px] text-slate-500 hover:text-white" title="Expand with AI analytics">Expand ↗</button>
+        </div>
+        <div class="ov-chart-body" data-ovslot="trust"></div>
+      </div>
+    </div>
+
+    <!-- Bottom-center: the chat input bar -->
+    <div id="ov-inputbar" class="ov-fade sticky bottom-0 z-10 mx-auto w-full max-w-3xl shrink-0 bg-gradient-to-t from-ink-950 via-ink-950/95 to-transparent pb-4 pt-3 lg:static lg:bg-none lg:p-0">
+      <div class="wave" data-wave aria-hidden="true"></div>
+      <div class="flex justify-center pt-1"><div data-listen-pill class="hidden items-center gap-2 text-[11px] font-medium text-rose-200" role="status" aria-live="polite">
+      <span class="relative flex h-2 w-2" aria-hidden="true"><span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span><span class="relative inline-flex h-2 w-2 rounded-full bg-rose-500"></span></span>
+      <span data-listen-text>🎙️ Listening…</span></div></div>
+      <form id="ov-form" class="mt-1.5 flex items-center gap-2 rounded-2xl border border-violet-400/30 bg-white/5 p-1.5 backdrop-blur-lg shadow-[0_0_20px_rgba(139,92,246,0.2)] focus-within:border-violet-400/60">
+        <input id="ov-input" maxlength="500" autocomplete="off" placeholder="Ask anything… e.g. “What needs my approval?”"
+               class="min-w-0 flex-1 bg-transparent px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none">
+        <button type="button" id="ov-mic" aria-label="Speak instead" title="Speak instead" aria-pressed="false"
+                class="mic-btn grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-rose-400/40 text-rose-300 hover:bg-white/10">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 18v4"/></svg>
+        </button>
+        <button id="ov-send" class="h-10 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-500 px-5 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50">Ask</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- =================================================================== SPATIAL AI: SPOTLIGHT -->
+<div id="spot-catcher" class="fixed inset-0 z-30 hidden" aria-hidden="true"></div>
+<section id="spotlight" role="dialog" aria-modal="false" aria-labelledby="spot-title"
+         class="card fixed inset-x-4 top-20 z-[35] hidden max-h-[calc(100vh-7rem)] origin-center scale-95 flex-col overflow-hidden opacity-0 !bg-ink-900/80 transition-all duration-300 ease-out lg:inset-x-auto lg:top-1/2 lg:max-h-[min(80vh,780px)] lg:-translate-y-1/2">
+  <header class="flex items-start gap-3 border-b border-white/10 bg-gradient-to-r from-sky-500/10 via-indigo-500/10 to-fuchsia-500/10 px-5 py-4">
+    <svg class="mt-0.5 h-7 w-7 shrink-0"><use href="#sparkle"/></svg>
+    <div class="min-w-0 flex-1">
+      <p class="text-[11px] font-semibold uppercase tracking-wider text-indigo-300/90">AI Secretary is showing you</p>
+      <h3 id="spot-title" class="truncate text-lg font-semibold text-white"></h3>
+    </div>
+    <button id="spot-close" class="rounded-md px-2 py-1 text-slate-400 hover:bg-white/10 hover:text-white" aria-label="Close spotlight">✕</button>
+  </header>
+  <div class="flex items-start gap-3 border-b border-white/10 bg-violet-500/[0.06] px-5 py-3">
+    <p id="spot-text" class="min-w-0 flex-1 text-sm leading-relaxed text-violet-50"></p>
+    <button id="spot-replay" title="Read the explanation aloud" aria-label="Read the explanation aloud"
+            class="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/10 text-base hover:bg-white/10">🔊</button>
+  </div>
+  <div id="spot-body" class="scrollbar min-h-0 flex-1 overflow-auto px-5 py-4"></div>
+</section>
+
+<button id="chat-fab" aria-label="Open the Valio Aimo Voice Secretary chat" aria-expanded="false"
+        class="chat-glow fixed bottom-5 right-5 z-40 hidden h-14 w-14 place-items-center rounded-full border border-indigo-400/30 bg-ink-900 transition hover:scale-105">
+  <svg class="h-7 w-7"><use href="#sparkle"/></svg>
+</button>
+
+<section id="chat" role="dialog" aria-label="Valio Aimo Voice Secretary"
+         class="fixed bottom-24 right-4 z-40 hidden w-[calc(100vw-2rem)] max-w-[400px] flex-col overflow-hidden rounded-2xl border border-indigo-400/20 bg-ink-900 shadow-2xl chat-glow-soft"
+         style="height:min(560px, calc(100vh - 8rem));">
+  <header class="flex items-center gap-3 border-b border-ink-700 bg-gradient-to-r from-sky-500/10 via-indigo-500/10 to-fuchsia-500/10 px-4 py-3">
+    <svg class="h-6 w-6 shrink-0"><use href="#sparkle"/></svg>
+    <div class="min-w-0 flex-1">
+      <h2 class="truncate text-sm font-semibold text-white">Valio Aimo Voice Secretary</h2>
+      <p class="text-[11px] text-slate-400">Powered by Gemini · <span id="chat-model">reads the live dashboard</span></p>
+    </div>
+    <!-- Small speaker icon: mute / unmute spoken replies -->
+    <button id="voice-toggle" class="grid h-8 w-8 place-items-center rounded-full border border-ink-600 text-base hover:bg-ink-800"
+            role="switch" aria-checked="true" title="Voice replies on: click to mute">
+      <span id="voice-icon" aria-hidden="true">🔊</span><span id="voice-label" class="sr-only">Voice on</span>
+    </button>
+    <button id="chat-expand" class="grid h-8 w-8 place-items-center rounded-full border border-ink-600 text-slate-300 hover:bg-ink-800 hover:text-white"
+            aria-label="Open the full-screen assistant" title="Full screen">
+      <svg id="chat-expand-icon" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+    </button>
+    <button id="chat-close" class="rounded-md px-2 py-1 text-slate-400 hover:bg-ink-800 hover:text-white" aria-label="Close chat">✕</button>
+  </header>
+  <div id="chat-log" class="scrollbar flex-1 space-y-3 overflow-y-auto px-4 py-4" aria-live="polite">
+    <div class="rounded-xl bg-ink-850 px-3 py-2.5 text-sm text-slate-300">
+      Hi! I'm your Voice Secretary. Tap the <span class="text-rose-300">microphone</span> and ask, for example,
+      <em>"What orders are pending?"</em> or <em>"Explain the dashboard"</em>. I read the live dashboard and signed
+      decisions, but I can't approve or change anything myself.
+      <p class="mt-1.5 text-[10px] text-slate-500">Voice is processed by Google (browser speech service or Gemini). Recordings are not stored.</p>
+    </div>
+  </div>
+  <div id="voice-status" class="hidden items-center gap-2 border-t border-ink-800 bg-rose-500/10 px-4 py-2 text-xs text-rose-200">
+    <span class="h-2 w-2 animate-pulse rounded-full bg-rose-500"></span><span id="voice-status-text">Listening…</span>
+  </div>
+  <div id="chat-quick" class="flex flex-wrap gap-2 border-t border-ink-800 px-4 pt-3">
+    <button data-quick="What orders are pending?" class="rounded-full border border-indigo-400/30 bg-indigo-500/10 px-3 py-1 text-xs text-indigo-200 hover:bg-indigo-500/20">What orders are pending?</button>
+    <button data-quick="Explain the dashboard." class="rounded-full border border-indigo-400/30 bg-indigo-500/10 px-3 py-1 text-xs text-indigo-200 hover:bg-indigo-500/20">Explain the dashboard</button>
+    <button data-quick="Why was the last order rejected?" class="rounded-full border border-indigo-400/30 bg-indigo-500/10 px-3 py-1 text-xs text-indigo-200 hover:bg-indigo-500/20">Why was the last order rejected?</button>
+  </div>
+  <div class="wave px-4 pt-2" data-wave aria-hidden="true"></div>
+  <div class="px-4 pt-1"><div data-listen-pill class="hidden items-center gap-2 text-[11px] font-medium text-rose-200" role="status" aria-live="polite">
+      <span class="relative flex h-2 w-2" aria-hidden="true"><span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span><span class="relative inline-flex h-2 w-2 rounded-full bg-rose-500"></span></span>
+      <span data-listen-text>🎙️ Listening…</span></div></div>
+  <form id="chat-form" class="flex gap-2 px-4 pb-3 pt-1">
+    <input id="chat-input" maxlength="500" autocomplete="off" placeholder="Ask or tap the mic…"
+           class="min-w-0 flex-1 rounded-lg border border-ink-600 bg-ink-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-indigo-400 focus:outline-none">
+    <!-- Microphone next to Send: pulses red while listening -->
+    <button type="button" id="mic-inline" aria-label="Speak your question" aria-pressed="false" title="Speak your question"
+            class="mic-btn grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-rose-400/40 text-rose-300 hover:bg-ink-800">
+      <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 18v4"/>
+      </svg>
+    </button>
+    <button id="chat-send" class="rounded-lg bg-gradient-to-r from-sky-500 to-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50">Send</button>
+  </form>
+</section>
+
+<script>{% raw %}
+(() => {
+  "use strict";
+
+  // ======================================================================== utilities
+  const $ = (id) => document.getElementById(id);
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const eur = (v) => v == null ? "—" : new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR" }).format(v);
+  const num = (v) => v == null ? "—" : new Intl.NumberFormat("en-IE", { maximumFractionDigits: 3 }).format(v);
+  const ago = (iso) => {
+    if (!iso) return "never";
+    const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 45) return "just now";
+    if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+    return new Date(iso).toLocaleDateString();
+  };
+  // Storage access can throw (privacy mode / blocked site data): always guarded
+  const store = {
+    get(k, local = false) { try { return (local ? localStorage : sessionStorage).getItem(k) || ""; } catch { return ""; } },
+    set(k, v, local = false) { try { const s = local ? localStorage : sessionStorage; v ? s.setItem(k, v) : s.removeItem(k); } catch {} },
+  };
+  // ------------------------------------------------------------------ toasts (bottom-left, glass, auto-dismiss)
+  const TOAST = {
+    ok:   { ring: "border-green-400/70",  bar: "bg-green-400",  icon: "✓", label: "Success" },
+    err:  { ring: "border-red-400/70",    bar: "bg-red-400",    icon: "!", label: "Error" },
+    warn: { ring: "border-yellow-400/70", bar: "bg-yellow-400", icon: "⚠", label: "Warning" },
+    info: { ring: "border-sky-400/60",    bar: "bg-sky-400",    icon: "i", label: "Info" },
+  };
+  const TOAST_MS = 3000;
+  function toast(msg, kind = "info") {
+    try {
+      const t = TOAST[kind] || TOAST.info;
+      const box = $("toasts");
+      while (box.children.length >= 4) box.firstElementChild.remove();          // never pile up
+      const el = document.createElement("div");
+      el.setAttribute("role", kind === "err" ? "alert" : "status");
+      el.className = `toast pointer-events-auto relative overflow-hidden rounded-xl border border-l-4 ${t.ring} bg-ink-900/75 shadow-[0_0_20px_rgba(0,0,0,0.5)] backdrop-blur-lg`;
+      el.innerHTML = `<div class="flex items-start gap-3 px-4 py-3">
+          <span class="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full ${t.bar} text-[11px] font-bold text-ink-950" aria-hidden="true">${t.icon}</span>
+          <p class="min-w-0 flex-1 text-sm leading-snug text-slate-100"><span class="sr-only">${t.label}: </span></p>
+          <button class="-mr-1 rounded px-1 text-slate-400 hover:text-white" aria-label="Dismiss">✕</button>
+        </div>
+        <div class="absolute bottom-0 left-0 h-0.5 w-full origin-left ${t.bar}" style="opacity:.7;animation: toast-timer ${TOAST_MS}ms linear forwards"></div>`;
+      el.querySelector("p").append(String(msg ?? ""));                         // text node: never HTML
+      const bar = el.lastElementChild;
+      let timer = null, remaining = TOAST_MS, startedAt = 0;
+      const leave = () => {
+        clearTimeout(timer);
+        el.classList.add("leaving");
+        el.addEventListener("animationend", () => el.remove(), { once: true });
+        setTimeout(() => el.remove(), 400);                                     // in case animations are disabled
+      };
+      const arm = () => { startedAt = Date.now(); timer = setTimeout(leave, Math.max(300, remaining)); bar.style.animationPlayState = "running"; };
+      el.addEventListener("mouseenter", () => { clearTimeout(timer); remaining -= Date.now() - startedAt; bar.style.animationPlayState = "paused"; });
+      el.addEventListener("mouseleave", arm);
+      el.querySelector("button").addEventListener("click", leave);
+      box.appendChild(el);
+      arm();
+    } catch (e) {
+      console.warn("toast failed:", e, msg);                                    // a broken toast must never break the page
+    }
+  }
+
+  // ------------------------------------------------------------------ modal (confirmations + expanded charts)
+  const modal = { onClose: null, lastFocus: null, open: false };
+  function openModal({ kicker = "", title = "", body = "", actions = [], width = "520px", height = null, onClose = null } = {}) {
+    closeModal(true);
+    const root = $("modal"), panel = $("modal-panel");
+    $("modal-kicker").textContent = kicker;
+    $("modal-title").textContent = title;
+    const bodyEl = $("modal-body");
+    bodyEl.innerHTML = "";
+    if (typeof body === "string") bodyEl.innerHTML = body; else if (body) bodyEl.append(body);
+    const act = $("modal-actions");
+    act.innerHTML = "";
+    act.classList.toggle("hidden", !actions.length);
+    actions.forEach((a) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = a.label;
+      b.className = a.className || "rounded-lg border border-white/15 px-4 py-2 text-sm text-slate-200 hover:bg-white/10";
+      b.addEventListener("click", () => a.onClick?.());
+      if (a.autofocus) b.dataset.autofocus = "1";
+      act.append(b);
+    });
+    panel.style.maxWidth = width;
+    panel.style.width = width === "520px" ? "100%" : width;
+    panel.style.height = height || "";
+    modal.onClose = onClose;
+    modal.lastFocus = document.activeElement;
+    modal.open = true;
+    root.classList.remove("hidden"); root.classList.add("flex");
+    void root.offsetWidth;                                                       // commit the closed state first
+    root.dataset.state = "open";
+    (act.querySelector("[data-autofocus]") || root.querySelector("[data-modal-close]"))?.focus();
+  }
+  function closeModal(immediate = false) {
+    if (!modal.open) return;
+    modal.open = false;
+    const root = $("modal");
+    const cb = modal.onClose; modal.onClose = null;
+    root.dataset.state = "closed";
+    const done = () => { if (!modal.open) { root.classList.add("hidden"); root.classList.remove("flex"); } };
+    immediate ? done() : setTimeout(done, 200);
+    try { cb?.(); } catch (e) { console.warn("modal onClose failed:", e); }
+    if (!immediate) modal.lastFocus?.focus?.();
+  }
+  $("modal").addEventListener("click", (e) => {
+    if (e.target.closest("[data-modal-close]") || e.target.hasAttribute("data-modal-backdrop")) closeModal();
+  });
+  // Capture phase: Esc closes the modal FIRST and doesn't also close the chat / drawer behind it
+  document.addEventListener("keydown", (e) => {
+    if (!modal.open) return;
+    if (e.key === "Escape") { e.stopImmediatePropagation(); e.preventDefault(); closeModal(); }
+    if (e.key === "Tab") {                                                      // keep keyboard focus inside the modal
+      const f = [...$("modal-panel").querySelectorAll("button, [href], input, textarea, select, [tabindex]:not([tabindex='-1'])")]
+        .filter((x) => !x.disabled && x.offsetParent !== null);
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  }, true);
+
+  // Promise-based replacement for window.confirm()
+  const TONE = {
+    approve: "rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-500",
+    remember: "rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500",
+    reject: "rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500",
+  };
+  function confirmDialog({ kicker = "Please confirm", title, html, confirmLabel = "Confirm", tone = "approve" }) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
+      openModal({
+        kicker, title, body: html,
+        actions: [
+          { label: "Cancel", onClick: () => { settle(false); closeModal(); } },
+          { label: confirmLabel, className: TONE[tone] || TONE.approve, autofocus: true,
+            onClick: () => { settle(true); closeModal(); } },
+        ],
+        onClose: () => settle(false),                                           // Esc / backdrop / ✕ = cancel
+      });
+    });
+  }
+  const badge = (text, cls) => `<span class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${cls}">${esc(text)}</span>`;
+  const STATUS = {
+    PENDING_APPROVAL: "bg-yellow-400/20 text-yellow-200 ring-yellow-400/60 font-semibold",
+    AUTO_APPROVED: "bg-green-500/20 text-green-300 ring-green-400/60 font-semibold",
+    PLACED: "bg-green-500/20 text-green-300 ring-green-400/60 font-semibold",
+    REJECTED: "bg-red-500/20 text-red-300 ring-red-400/60 font-semibold",
+    REJECTED_BY_HUMAN: "bg-red-500/20 text-red-300 ring-red-400/60 font-semibold",
+    OPEN: "bg-cyan-500/20 text-cyan-200 ring-cyan-400/60 font-semibold",
+    ACCEPTED: "bg-green-500/20 text-green-300 ring-green-400/60 font-semibold",
+    EXPIRED: "bg-slate-500/15 text-slate-400 ring-slate-500/30",
+  };
+  const ACTION = {
+    SEARCH: "text-slate-400", QUOTE: "text-sky-300", SUBSTITUTION: "text-violet-300", ORDER_SUBMITTED: "text-slate-200",
+    POLICY_DECISION: "text-amber-300", ORDER_PLACED: "text-emerald-300", APPROVAL: "text-emerald-300",
+    REJECTION: "text-rose-300", APPROVED_BY_AI_SECRETARY: "text-violet-300", REJECTED_BY_AI_SECRETARY: "text-violet-300", ORDERED_BY_AI_SECRETARY: "text-violet-300", QUICK_ORDER: "text-emerald-300", NEGOTIATION_WON: "text-green-300", NEGOTIATION_LOST: "text-yellow-300", OFFER: "text-cyan-300", TRUST_RULE: "text-blue-400", TRUST_LEVEL: "text-blue-400",
+    WEBHOOK: "text-indigo-300", SYSTEM: "text-slate-500",
+  };
+  const SEVERITY = { REJECT: "bg-rose-500/15 text-rose-300", PENDING: "bg-amber-500/15 text-amber-300", INFO: "bg-slate-500/15 text-slate-300" };
+
+  // ======================================================================== state
+  const S = {
+    token: store.get("va_token"), role: store.get("va_role"), user: store.get("va_user"),
+    explain: store.get("va_explain", true) !== "off",
+    drafts: {}, pendingSig: "", audit: [], seenSeq: new Set(), offers: [],
+    ws: null, wsRetry: 0, wsTimer: null, pingTimer: null, pollTimer: null, refreshTimer: null,
+    charts: {}, markdown: "", mdOrder: "",
+  };
+  const isManager = () => S.role === "manager";
+
+  // ======================================================================== API
+  // Turns any backend error into a precise, human message:
+  //   422 validation -> "quantity: Input should be greater than 0; offer_id: Field required"
+  //   our errors     -> "OFFER_SIGNATURE_INVALID: This offer was signed with gateway key …"
+  class ApiError extends Error {
+    constructor(status, body) {
+      const d = body?.detail ?? body?.error ?? null;
+      let msg = null, fields = [];
+      if (Array.isArray(d) && d.length) {
+        fields = d.map((x) => (x.loc || []).filter((p) => p !== "body").join(".") || "request");
+        msg = d.map((x, i) => `${fields[i]}: ${x.msg}${x.type === "extra_forbidden" ? " (unexpected field)" : ""}`).join("; ");
+      } else if (d && typeof d === "object") {
+        msg = [d.error, d.detail || d.reason].filter(Boolean).join(": ") || JSON.stringify(d);
+      } else if (typeof d === "string") msg = d;
+      super(msg || `HTTP ${status}`);
+      this.status = status; this.body = body;
+      this.code = d && typeof d === "object" && !Array.isArray(d) ? d.error || null : status === 422 ? "VALIDATION_ERROR" : null;
+      this.fields = fields;                         // e.g. ["quantity"] for a 422
+    }
+  }
+  async function api(path, { method = "GET", body, text = false } = {}) {
+    const headers = { Authorization: `Bearer ${S.token}` };
+    if (body) headers["Content-Type"] = "application/json";
+    const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    if (res.status === 401) { logout("Your session expired. Please sign in again."); throw new ApiError(401, null); }
+    if (!res.ok) { let b = null; try { b = await res.json(); } catch {} throw new ApiError(res.status, b); }
+    if (res.status === 204) return null;
+    return text ? res.text() : res.json();
+  }
+
+  // ======================================================================== login / logout
+  let chosenRole = "manager";
+  function selectRole(role) {
+    chosenRole = role;
+    document.querySelectorAll("[data-role-tab]").forEach((b) => {
+      const on = b.dataset.roleTab === role;
+      b.className = `rounded-md px-3 py-2 font-medium ${on ? "bg-sky-600 text-white shadow" : "text-slate-400 hover:text-slate-200"}`;
+      b.setAttribute("aria-selected", on);
+    });
+    $("role-hint").textContent = role === "manager"
+      ? "Managers review escalations, approve or reject orders and teach trusted rules."
+      : "Auditors get read-only access to decisions, explanations and the audit chain.";
+    $("login-user").value = role;
+    $("login-pass").value = "";
+    $("login-pass").focus();
+  }
+  document.querySelectorAll("[data-role-tab]").forEach((b) => b.addEventListener("click", () => selectRole(b.dataset.roleTab)));
+  if (["localhost", "127.0.0.1"].includes(location.hostname)) $("demo-creds").classList.remove("hidden");
+
+  $("login-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const err = $("login-error"); err.classList.add("hidden");
+    $("login-submit").disabled = true;
+    try {
+      const res = await fetch("/v1/auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: $("login-user").value.trim(), password: $("login-pass").value }) });
+      if (!res.ok) throw new Error(res.status === 401 ? "Wrong username or password." : `Login failed (HTTP ${res.status}).`);
+      const r = await res.json();
+      // The role comes from the SERVER, never from the tab the user clicked
+      Object.assign(S, { token: r.token, role: r.role, user: r.username });
+      store.set("va_token", r.token); store.set("va_role", r.role); store.set("va_user", r.username);
+      store.set(GREET_KEY, "pending");     // play the greeting once for this login
+      if (r.role !== chosenRole) toast(`Signed in as ${r.role}: roles are assigned per account.`, "info");
+      start();
+    } catch (ex) {
+      err.textContent = ex.message; err.classList.remove("hidden");
+    } finally { $("login-submit").disabled = false; }
+  });
+
+  async function logout(message) {
+    if (S.token) { try { await fetch("/v1/auth/logout", { method: "POST", headers: { Authorization: `Bearer ${S.token}` } }); } catch {} }
+    Object.assign(S, { token: "", role: "", user: "" });
+    ["va_token", "va_role", "va_user", GREET_KEY].forEach((k) => store.set(k, ""));
+    if (typeof skipGreeting === "function") skipGreeting();
+    stopLive();
+    if (typeof toggleChat === "function") { toggleChat(false); stopListening({ discard: true }); stopSpeaking(); }
+    if (typeof closeSpotlight === "function") closeSpotlight();
+    $("chat-fab").classList.add("hidden"); $("chat-fab").classList.remove("grid");
+    $("app").classList.add("hidden");
+    $("login").classList.remove("hidden"); $("login").classList.add("flex");
+    selectRole(chosenRole);
+    if (message) { $("login-error").textContent = message; $("login-error").classList.remove("hidden"); }
+  }
+  $("btn-logout").addEventListener("click", () => logout());
+
+  // ======================================================================== WebSocket (#12)
+  function setWs(state) {
+    const v = {
+      live: ["bg-green-400 live-ping", "● Live Agent Activity", "text-green-300"],
+      connecting: ["bg-amber-400 live-dot", "Connecting…", "text-amber-300"],
+      down: ["bg-red-500", "Disconnected", "text-red-300"],
+    }[state];
+    $("ws-status").innerHTML = `<span id="live-dot" class="h-2 w-2 rounded-full ${v[0]}"></span><span class="font-semibold tracking-wide ${v[2]}">${v[1].replace("● ", "")}</span>`
+      + (state === "down" ? `<span class="text-slate-500">· retrying</span>` : "");
+    $("ws-status").title = state === "live" ? "Connected: agent activity streams in live" : "Live updates paused; reconnecting";
+  }
+  function connectWs() {
+    clearTimeout(S.wsTimer);
+    setWs("connecting");
+    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+    S.ws = ws;
+    ws.onopen = () => ws.send(JSON.stringify({ type: "auth", token: S.token }));  // token never in the URL
+    ws.onmessage = (ev) => {
+      let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.type === "hello") { S.wsRetry = 0; setWs("live"); stopPolling(); return; }
+      onLiveEvent(msg);
+    };
+    ws.onclose = (ev) => {
+      if (S.ws !== ws) return;               // superseded by a newer socket
+      clearInterval(S.pingTimer);
+      if (ev.code === 4401) { logout("Your session expired. Please sign in again."); return; }
+      if (!S.token) return;
+      setWs("down");
+      startPolling();                        // keep the screen fresh while offline
+      const delay = Math.min(30000, 1000 * 2 ** S.wsRetry++);
+      S.wsTimer = setTimeout(connectWs, delay);
+    };
+    clearInterval(S.pingTimer);
+    S.pingTimer = setInterval(() => { if (ws.readyState === 1) ws.send("ping"); }, 25000);
+  }
+  function stopLive() {
+    clearTimeout(S.wsTimer); clearInterval(S.pingTimer); stopPolling();
+    if (S.ws) { const w = S.ws; S.ws = null; try { w.close(); } catch {} }
+  }
+  function startPolling() { if (!S.pollTimer) S.pollTimer = setInterval(() => refresh(["metrics", "approvals", "offers"]), 15000); }
+  function stopPolling() { clearInterval(S.pollTimer); S.pollTimer = null; }
+
+  function onLiveEvent(msg) {
+    const pill = $("ws-status");
+    pill.classList.remove("live-flash"); void pill.offsetWidth; pill.classList.add("live-flash");
+    switch (msg.type) {
+      case "audit":
+        addAudit(msg.data, true);
+        if (["TRUST_LEVEL", "TRUST_RULE", "WEBHOOK", "ORDER_PLACED"].includes(msg.data.action)) scheduleRefresh(["metrics"]);
+        if (msg.data.action === "TRUST_LEVEL") toast(`Trust level change: ${msg.data.summary}`, "ok");
+        if (msg.data.action === "NEGOTIATION_WON") {
+          toast(`🤝 ${msg.data.summary}`, "ok");
+          // Instant: add the event's saved_amount to the card now; the authoritative total follows from /v1/metrics
+          if (S.lastMetrics?.negotiation && msg.data.saved_amount) {
+            S.lastMetrics.negotiation.saved_total_eur = +(S.lastMetrics.negotiation.saved_total_eur + msg.data.saved_amount).toFixed(2);
+            S.lastMetrics.negotiation.won += 1;
+            renderMetrics(S.lastMetrics);
+          }
+          scheduleRefresh(["metrics", "offers"]);
+        }
+        break;
+      case "order":
+        scheduleRefresh(["approvals", "metrics"]);
+        if (msg.data.status === "PENDING_APPROVAL")
+          toast(`New escalation: ${msg.data.order_id} (${eur(msg.data.net_total)})${msg.data.drift ? " · drift detected" : ""}`, "warn");
+        break;
+      case "offer": {
+        const i = S.offers.findIndex((o) => o.offer_id === msg.data.offer_id);
+        if (i >= 0) S.offers[i] = { ...S.offers[i], ...msg.data };         // status change, e.g. ACCEPTED
+        else {
+          S.offers.unshift({ ...msg.data, _new: true });
+          toast(`Valio offer: ${msg.data.name} −${msg.data.discount_pct}%`, "info");
+        }
+        renderOffers();
+        break;
+      }
+      case "order_placed":                     // a last-minute event order (chat or API) just went through
+        if (!(msg.data.source === "quick_order" && S.quickOrdersInFlight > 0))   // the Order button shows its own toast
+          toast(`${msg.data.source === "quick_order" ? "⚡" : "🎉"} ${msg.data.message}`, msg.data.status === "REJECTED" ? "err" : msg.data.status === "PENDING_APPROVAL" ? "warn" : "ok");
+        S.pendingSig = "";
+        refresh(["approvals", "metrics", "audit"]);
+        break;
+      case "webhook":
+        scheduleRefresh(["metrics"]);
+        break;
+    }
+  }
+  function scheduleRefresh(parts) {
+    S.refreshParts = new Set([...(S.refreshParts || []), ...parts]);
+    clearTimeout(S.refreshTimer);
+    S.refreshTimer = setTimeout(() => { const p = [...S.refreshParts]; S.refreshParts = new Set(); refresh(p); }, 250);
+  }
+
+  // ======================================================================== metrics (#14)
+  Chart.defaults.color = "#94a3b8";
+  Chart.defaults.borderColor = "#1f2840";
+  Chart.defaults.font.family = "Inter, ui-sans-serif, system-ui";
+
+  function renderMetrics(m) {
+    S.lastMetrics = m;                     // used by the expanded-chart modals
+    document.querySelectorAll("[data-chart-skel]").forEach((el) => el.remove());
+    const by = Object.fromEntries((m.placed_by_decider || []).map((r) => [r.decided_by, r]));
+    const auto = by.auto || { n: 0, value: 0 }, rule = by.trusted_rule || { n: 0, value: 0 }, human = by.human || { n: 0, value: 0 };
+    const placed = auto.n + rule.n + human.n;
+    const wh = m.webhooks || {};
+    // Total AI Value Generated = measured negotiation savings + (errors prevented x estimate per error).
+    // Counts come from /v1/metrics (all orders, not just the events loaded in the feed); the sum is done here.
+    const aiValueTile = (mm) => {
+      const negotiation = +(mm.negotiation?.saved_total_eur || 0);
+      const ep = mm.errors_prevented || { orders: 0, rejected_by_policy: 0, drift_flagged: 0 };
+      const per = +(mm.roi?.error_prevention_estimate_eur ?? 50);
+      const prevention = ep.orders * per;
+      const total = +(negotiation + prevention).toFixed(2);
+      const tip = `Negotiation savings (measured, simulated counter-party): ${eur(negotiation)}
+` +
+                  `Errors prevented: ${ep.orders} order(s) (${ep.rejected_by_policy} rejected by policy, ${ep.drift_flagged} drift-flagged; ` +
+                  `each order counted once) x ${eur(per)} estimate = ${eur(prevention)}
+` +
+                  `Estimate per error is policy roi.error_prevention_estimate_eur.`;
+      return `<div class="card ai-value p-4 md:col-span-2" title="${esc(tip)}">
+        <p class="text-[11px] font-semibold uppercase tracking-wider text-green-300/90">✨ Total AI Value Generated (€)</p>
+        <p class="mt-1 font-display text-3xl font-bold tabular-nums text-green-300">${esc(eur(total))}</p>
+        <p class="mt-0.5 text-xs text-slate-400">Total money saved through AI negotiation and error prevention.</p>
+        <p class="mt-1.5 text-[11px] text-slate-500">${esc(eur(negotiation))} negotiation ·
+          ${esc(ep.orders)} error${ep.orders === 1 ? "" : "s"} prevented × ${esc(eur(per))} <span class="text-slate-400">(est.)</span></p>
+      </div>`;
+    };
+    const tile = (label, value, sub, accent = "text-white") => `<div class="card p-4">
+      <p class="text-[11px] font-medium uppercase tracking-wider text-slate-500">${esc(label)}</p>
+      <p class="mt-1 text-2xl font-semibold tabular-nums ${accent}">${esc(value)}</p>
+      <p class="mt-0.5 text-xs text-slate-500">${sub}</p></div>`;
+    $("tiles").innerHTML = [
+      tile("Total spend", eur(m.total_spend), `${placed} placed order${placed === 1 ? "" : "s"}`),
+      tile("Awaiting approval", m.pending_approvals, m.pending_approvals ? "agents are waiting on a human" : "nothing waiting",
+           m.pending_approvals ? "text-amber-300" : "text-white"),
+      tile("Autonomy rate", placed ? `${Math.round((auto.n + rule.n) / placed * 100)}%` : "—",
+           `${auto.n + rule.n} without a human · ${human.n} human`, "text-emerald-300"),
+      tile("Drift events", m.drift_events, `threshold +${esc(m.policy.drift_threshold_pct)}% vs history`, m.drift_events ? "text-orange-300" : "text-white"),
+      tile("Savings via negotiation", eur(m.negotiation?.saved_total_eur || 0),
+           `🤝 ${esc(m.negotiation?.won || 0)} won · ${esc(m.negotiation?.lost || 0)} lost` +
+           (m.negotiation?.saved_pending_eur ? ` · ${esc(eur(m.negotiation.saved_pending_eur))} awaiting approval` : "") +
+           ` · <span title="Valio's side of the negotiation is simulated in this demo; savings are vs list price of the bigger order">simulated</span>`,
+           "text-green-300"),
+      aiValueTile(m),
+      tile("Trusted rules", m.active_trusted_rules,
+           `webhooks ✓${esc(wh.DELIVERED || 0)}${wh.FAILED ? ` · <span class="text-rose-300">✗${esc(wh.FAILED)}</span>` : ""}`, "text-blue-400"),
+    ].join("");
+
+    // Doughnut: final decision per order (pending orders have no decision yet, so they're excluded)
+    //   Auto-approved  = PLACED with no human: plain policy pass ("auto") + trusted-rule matches ("trusted_rule")
+    //   Human approved = PLACED after a manager approved a PENDING_APPROVAL order ("human")
+    //   Rejected       = REJECTED by the guardrails + REJECTED_BY_HUMAN by a manager
+    const st = m.orders_by_status || {};
+    const rejPolicy = st.REJECTED || 0, rejHuman = st.REJECTED_BY_HUMAN || 0;
+    const buckets = [
+      { name: "Auto-approved", n: auto.n + rule.n, value: auto.value + rule.value,
+        detail: `${auto.n} by policy · ${rule.n} via trusted rule` },
+      { name: "Human approved", n: human.n, value: human.value, detail: "approved by a manager" },
+      { name: "Rejected", n: rejPolicy + rejHuman, value: null,
+        detail: `${rejPolicy} by guardrails · ${rejHuman} by a manager` },
+    ];
+    const decided = buckets.reduce((s, b) => s + b.n, 0);
+    $("deciders-empty").classList.toggle("hidden", decided > 0);
+    $("chart-deciders").classList.toggle("hidden", decided === 0);
+    const dData = buckets.map((b) => b.n);
+    S.deciders = buckets;                                  // read by the tooltip, so it is never stale
+    const dLabels = buckets.map((b) => `${b.name} (${b.n})`);  // a 0 explains a missing slice
+    if (!S.charts.d) {
+      S.charts.d = new Chart($("chart-deciders"), {
+        type: "doughnut",
+        data: { labels: dLabels,
+                // Order matches buckets: Auto-approved = green, Human approved = purple, Rejected = red
+                datasets: [{ data: dData, backgroundColor: ["#22c55e", "#a855f7", "#ef4444"],
+                             hoverBackgroundColor: ["#4ade80", "#c084fc", "#f87171"],
+                             borderColor: "#0f1420", borderWidth: 3 }] },
+        options: { cutout: "62%", maintainAspectRatio: false,
+                   plugins: {
+                     legend: { position: "bottom", labels: {
+                       boxWidth: 10, font: { size: 11 },
+                       // Dim categories with no orders: they have no slice on the ring
+                       generateLabels: (chart) => Chart.overrides.doughnut.plugins.legend.labels.generateLabels(chart)
+                         .map((item) => chart.data.datasets[0].data[item.index] === 0 ? { ...item, fontColor: "#475569" } : item),
+                     } },
+                     tooltip: { callbacks: {
+                       label: (c) => {
+                         const b = S.deciders[c.dataIndex];
+                         return ` ${b.name}: ${b.n} order(s)${b.value != null ? `, ${eur(b.value)}` : ""}`;
+                       },
+                       afterLabel: (c) => ` ${S.deciders[c.dataIndex].detail}`,
+                     } },
+                   } },
+      });
+    } else {
+      S.charts.d.data.labels = dLabels;
+      S.charts.d.data.datasets[0].data = dData;
+      S.charts.d.update();
+    }
+
+    // Bar: spend per day
+    const days = (m.daily_spend || []).map((d) => d.day.slice(5));
+    const spend = (m.daily_spend || []).map((d) => d.spend);
+    if (!S.charts.b) {
+      S.charts.b = new Chart($("chart-daily"), {
+        type: "bar",
+        data: { labels: days, datasets: [{ data: spend, backgroundColor: "#0ea5e9", borderRadius: 6, maxBarThickness: 36 }] },
+        options: { maintainAspectRatio: false, plugins: { legend: { display: false },
+                   tooltip: { callbacks: { label: (c) => ` ${eur(c.raw)}` } } },
+                   scales: { y: { ticks: { callback: (v) => `€${v}` }, grid: { color: "#1a2133" } }, x: { grid: { display: false } } } },
+      });
+    } else { S.charts.b.data.labels = days; S.charts.b.data.datasets[0].data = spend; S.charts.b.update(); }
+
+    renderTrust(m.agents || []);
+    $("gw-pills").innerHTML = [["Upstream", m.gateway.upstream], ["Search", m.gateway.semantic_search ? "semantic" : "lexical"],
+      ["Policy", m.policy.policy_version], ["Viewers", m.gateway.live_clients]]
+      .map(([k, v]) => `<span class="rounded-full border border-ink-700 bg-ink-900 px-2.5 py-1"><span class="text-slate-500">${esc(k)}</span> <span class="font-medium text-slate-200">${esc(v)}</span></span>`).join("");
+  }
+
+  function renderTrust(agents) {
+    $("trust").innerHTML = agents.map((a) => {
+      const levels = [...(a.levels || [])].sort((x, y) => x.min_score - y.min_score);
+      const cur = levels.find((l) => l.level === a.level) || { min_score: 0 };
+      const nxt = a.next_level;
+      const top = nxt ? cur.min_score + (nxt.approvals_needed + a.score - cur.min_score) : null;
+      const pct = nxt ? Math.max(0, Math.min(100, (a.score - cur.min_score) / Math.max(1, top - cur.min_score) * 100)) : 100;
+      const color = ["", "bg-amber-400", "bg-sky-400", "bg-emerald-400"][a.level] || "bg-emerald-400";
+      return `<div>
+        <div class="flex items-baseline justify-between gap-2">
+          <p class="truncate font-mono text-xs text-white">${esc(a.agent_id)}</p>
+          <p class="shrink-0 text-xs"><span class="font-semibold text-white">L${esc(a.level)} ${esc(a.name)}</span>
+             <span class="text-slate-500">· auto limit</span> <span class="font-medium text-slate-200">${esc(eur(a.autonomous_limit))}</span></p>
+        </div>
+        <div class="mt-1.5 flex gap-1" aria-label="Trust level ${esc(a.level)} of ${levels.length}">
+          ${levels.map((l) => `<div class="h-2 flex-1 overflow-hidden rounded-full bg-ink-800">
+            <div class="h-full ${color} transition-all duration-700" style="width:${l.level < a.level ? 100 : l.level === a.level ? pct : 0}%"></div></div>`).join("")}
+        </div>
+        <p class="mt-1 text-[11px] text-slate-500">${esc(a.approvals)} approved · ${esc(a.rejections)} rejected · ${esc(a.autonomous_orders)} autonomous ·
+          ${nxt ? `<span class="text-slate-300">${esc(nxt.approvals_needed)} more approval(s)</span> → L${esc(nxt.level)} ${esc(nxt.name)} (${esc(eur(nxt.max_autonomous_spend))})`
+                : `<span class="text-emerald-300">top level reached</span>`}</p>
+      </div>`;
+    }).join("") || `<p class="text-sm text-slate-500">No agents configured.</p>`;
+  }
+
+  // ======================================================================== pending approvals
+  function renderPending(orders) {
+    S.pendingOrders = orders;              // the confirmation modal shows the order summary
+    const sig = JSON.stringify(orders.map((o) => o.order_id)) + S.role;
+    if (sig === S.pendingSig) return;      // unchanged: keep half-typed comments intact
+    S.pendingSig = sig;
+    if (!orders.length) {
+      $("pending").innerHTML = `<div class="card px-6 py-12 text-center"><p class="text-sm font-medium text-slate-300">All clear</p>
+        <p class="mt-1 text-xs text-slate-500">No orders are waiting for a human decision.</p></div>`;
+      return;
+    }
+    const mgr = isManager();
+    $("pending").innerHTML = orders.map((o) => {
+      const d = o.decision, t = o.agent_trust || {};
+      const drift = d.drift || [];
+      const reasons = d.violations.filter((v) => v.severity !== "INFO");
+      const lines = o.lines.map((l) => {
+        const delta = l.quotedUnitPrice && l.liveUnitPrice != null ? (l.liveUnitPrice - l.quotedUnitPrice) / l.quotedUnitPrice * 100 : null;
+        return `<tr class="align-top">
+          <td class="py-2 pr-3"><p class="text-slate-100">${esc(l.name)}</p>
+            <p class="font-mono text-[11px] text-slate-500">${esc(l.productId)}${l.substitutesFor ? ` <span class="ml-1 rounded bg-violet-500/15 px-1.5 py-0.5 font-sans text-[10px] text-violet-300">substitutes ${esc(l.substitutesFor)}</span>` : ""}</p></td>
+          <td class="py-2 pr-3 text-right tabular-nums">${esc(num(l.quantity))} <span class="text-slate-500">${esc(l.salesUnit)}</span></td>
+          <td class="py-2 pr-3 text-right tabular-nums">${esc(eur(l.unitPrice))}${delta != null && Math.abs(delta) > 0.05
+            ? `<p class="text-[11px] ${delta > 0 ? "text-rose-300" : "text-emerald-300"}">${delta > 0 ? "+" : ""}${delta.toFixed(1)}% vs quote</p>` : ""}</td>
+          <td class="py-2 text-right font-medium tabular-nums text-white">${esc(eur(l.lineValue))}</td></tr>`;
+      }).join("");
+      const rememberTitle = !mgr ? "Managers only" : o.rememberable ? "Approve and auto-approve identical orders (same agent, products, ≤ quantity, ≤ +10% value) for 30 days"
+        : "Can't be remembered: an escalation reason (e.g. price change or unverified stock) is never waivable";
+      return `<article class="card pending-card overflow-hidden">
+        <div class="flex flex-wrap items-start justify-between gap-3 border-b border-ink-800 bg-ink-850/60 px-5 py-4">
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              ${badge("Pending approval", STATUS.PENDING_APPROVAL)}
+              ${drift.length ? `<span title="${esc(drift.map((x) => `${x.metric === "order_total" ? "Order total" : x.productId}: +${x.deviation_pct}% vs ${x.baseline}`).join("\n"))}"
+                   class="inline-flex items-center gap-1 rounded-full bg-orange-500/15 px-2 py-0.5 text-[11px] font-semibold text-orange-300 ring-1 ring-inset ring-orange-500/40">⚠ DRIFT DETECTED +${esc(Math.round(Math.max(...drift.map((x) => x.deviation_pct))))}%</span>` : ""}
+              ${t.level ? badge(`L${t.level} ${t.name}`, "bg-slate-500/10 text-slate-300 ring-slate-500/30") : ""}
+              <span class="font-mono text-xs text-slate-400">${esc(o.order_id)}</span>
+            </div>
+            <p class="mt-1.5 text-sm text-slate-300"><span class="font-mono text-white">${esc(o.agent_id)}</span>
+              <span class="text-slate-500">for</span> ${esc(o.customer)} <span class="text-slate-500">· delivery</span> ${esc(o.requested_date)}</p>
+            <p class="mt-0.5 text-xs text-slate-500" title="${esc(o.created_at)}">Submitted ${esc(ago(o.created_at))}</p>
+          </div>
+          <div class="text-right"><p class="text-[11px] uppercase tracking-wider text-slate-500">Net total</p>
+            <p class="text-2xl font-semibold tabular-nums text-white">${esc(eur(d.totals.net_total))}</p>
+            <p class="text-xs text-slate-500">agent limit ${esc(eur(d.totals.autonomous_limit))}</p></div>
+        </div>
+        <div class="space-y-4 px-5 py-4">
+          <p class="rounded-lg border border-sky-500/20 bg-sky-500/5 px-3 py-2 text-sm leading-relaxed text-sky-100">${esc(d.explanation)}</p>
+          <div class="grid gap-5 md:grid-cols-5">
+            <div class="overflow-x-auto md:col-span-3"><table class="w-full text-sm"><tbody class="divide-y divide-ink-800">${lines}</tbody></table></div>
+            <ul class="space-y-1.5 md:col-span-2">${reasons.map((v) => `<li class="text-xs text-slate-300">
+              <span class="mr-1 rounded px-1.5 py-0.5 font-mono text-[10px] ${SEVERITY[v.severity]}">${esc(v.code)}</span>${esc(v.message)}</li>`).join("")}</ul>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-end gap-3 border-t border-ink-800 px-5 py-4">
+          <label class="min-w-[200px] flex-1 text-xs text-slate-400">Comment <span class="text-slate-500">(required to reject)</span>
+            <textarea rows="2" data-comment="${esc(o.order_id)}" ${mgr ? "" : "disabled"} placeholder="${mgr ? "Recorded in the audit trail" : "Read-only"}"
+              class="mt-1 w-full resize-y rounded-md border border-ink-600 bg-ink-900 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none disabled:opacity-50">${esc(S.drafts[o.order_id] || "")}</textarea>
+          </label>
+          <div class="flex flex-wrap gap-2">
+            <button data-audit="${esc(o.order_id)}" class="rounded-md border border-ink-600 px-3 py-2 text-sm text-slate-300 hover:bg-ink-800">Audit trail</button>
+            <button data-decide="reject" data-id="${esc(o.order_id)}" ${mgr ? "" : "disabled"} title="${mgr ? "" : "Managers only"}"
+              class="rounded-md border border-rose-500/50 px-4 py-2 text-sm font-medium text-rose-300 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40">Reject</button>
+            <button data-decide="approve" data-id="${esc(o.order_id)}" ${mgr ? "" : "disabled"} title="${mgr ? "Approve this order only" : "Managers only"}"
+              class="rounded-md border border-emerald-500/50 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-40">Approve</button>
+            <button data-decide="approve" data-remember="1" data-id="${esc(o.order_id)}" ${mgr && o.rememberable ? "" : "disabled"} title="${esc(rememberTitle)}"
+              class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-emerald-900 disabled:text-emerald-300/60">Approve &amp; Remember</button>
+          </div>
+        </div>
+      </article>`;
+    }).join("");
+  }
+
+  async function decide(id, decision, remember, buttons) {
+    if (!isManager()) { toast("Auditors have read-only access.", "err"); return; }
+    const comment = (S.drafts[id] || "").trim();
+    if (decision === "reject" && !comment) {
+      toast("Add a comment explaining the rejection.", "err");
+      document.querySelector(`[data-comment="${CSS.escape(id)}"]`)?.focus(); return;
+    }
+    const o = (S.pendingOrders || []).find((x) => x.order_id === id);
+    const summary = o ? `<div class="rounded-lg border border-white/10 bg-white/5 p-3 text-sm">
+        <p class="font-mono text-xs text-slate-400">${esc(id)}</p>
+        <p class="mt-1 text-slate-100">${esc(o.lines.map((l) => `${num(l.quantity)} ${l.salesUnit} ${l.name}`).join(", "))}</p>
+        <p class="mt-1 text-lg font-semibold text-white">${esc(eur(o.decision.totals.net_total))}
+           <span class="text-xs font-normal text-slate-400">· ${esc(o.agent_id)}</span></p></div>` : `<p class="font-mono text-sm">${esc(id)}</p>`;
+    const extra = decision === "reject"
+      ? `<p class="mt-3 text-sm text-slate-300">Your comment: <span class="text-white">“${esc(comment)}”</span></p>`
+      : remember
+        ? `<p class="mt-3 text-sm text-slate-300">The gateway will also <b class="text-violet-300">remember</b> this decision: identical orders
+           (same agent and products, up to this quantity and +10% value) will be auto-approved for 30 days. You can revoke the rule at any time.</p>`
+        : `<p class="mt-3 text-sm text-slate-300">The order will be placed with Valio Aimo immediately.</p>`;
+    const ok = await confirmDialog({
+      kicker: "Human approval",
+      title: decision === "reject" ? "Reject this order?" : remember ? "Approve & remember?" : "Approve this order?",
+      html: summary + extra,
+      confirmLabel: decision === "reject" ? "Reject order" : remember ? "Approve & remember" : "Approve order",
+      tone: decision === "reject" ? "reject" : remember ? "remember" : "approve",
+    });
+    if (!ok) return;
+    buttons.forEach((b) => (b.disabled = true));
+    try {
+      const o = await api(`/v1/approvals/${encodeURIComponent(id)}`, { method: "POST", body: { decision, comment: comment || null, remember } });
+      delete S.drafts[id];
+      if (decision === "reject") toast(`Rejected ${o.order_id}.`, "info");
+      else if (remember && o.approval?.trusted_rule_id) toast(`Approved & remembered as trusted rule #${o.approval.trusted_rule_id}. Placed ${o.confirmation?.number || ""}.`, "ok");
+      else if (remember) toast(`Approved, but not remembered: ${o.approval?.rule_note || "not eligible"}`, "info");
+      else toast(`Approved ${o.order_id}, placed ${o.confirmation?.number || ""}.`, "ok");
+    } catch (e) {
+      toast(e.status === 409 ? "Another manager already decided this order." : `Failed: ${e.message}`, "err");
+    } finally {
+      S.pendingSig = ""; refresh(["approvals", "metrics"]);
+      // Decided from inside the spotlight: re-render it with the new status instead of stale buttons
+      if (spot.open && spot.id === id) renderSpot("recent_orders", id, spot.seq).catch(() => {});
+      if (focus.on && focus.id === id) {
+        const fs = focus.seq;
+        renderSpot("recent_orders", id, fs, $("ov-stage-body"), $("ov-stage-title"), () => fs !== focus.seq || !focus.on).catch(() => {});
+      }
+    }
+  }
+
+  // ======================================================================== live audit trail
+  // Terminal-style line: [time] ACTION  summary, coloured by outcome (green ok / red reject / yellow warn)
+  function termClass(e) {
+    if (e.action === "NEGOTIATION_WON") return "term-ok";
+    if (["LAST_MINUTE_EVENT_ORDER", "ORDERED_BY_AI_SECRETARY", "QUICK_ORDER"].includes(e.action)) return /could not order/i.test(e.summary || "") ? "term-err"
+      : /awaiting/i.test(e.summary || "") ? "term-warn" : "term-ok";
+    if (["REJECTION", "REJECTED_BY_AI_SECRETARY"].includes(e.action) || e.status === "REJECTED") return "term-err";
+    if (e.action === "NEGOTIATION_LOST" || e.status === "PENDING_APPROVAL" || e.drift) return "term-warn";
+    if (["ORDER_PLACED", "APPROVAL", "APPROVED_BY_AI_SECRETARY"].includes(e.action) || e.status === "AUTO_APPROVED") return "term-ok";
+    return "term-info";
+  }
+  const clock = (iso) => { try { return new Date(iso).toLocaleTimeString([], { hour12: false }); } catch { return iso; } };
+  function auditItem(e, fresh) {
+    const cls = termClass(e);
+    const won = e.action === "NEGOTIATION_WON";
+    const expl = e.explanation && S.explain
+      ? `<p class="mt-1 border-l-2 ${cls === "term-err" ? "border-red-500/60" : cls === "term-warn" ? "border-yellow-400/60" : "border-green-500/60"} pl-2.5 text-[11px] leading-relaxed text-green-200/70">${esc(e.explanation)}</p>` : "";
+    return `<li class="${fresh ? "fade-in " : ""}${won ? "neg-won " : ""}px-4 py-2 text-[12px] ${e.order_id ? "cursor-pointer hover:bg-white/[0.04]" : ""}" ${e.order_id ? `data-audit="${esc(e.order_id)}"` : ""}>
+      <div class="flex items-baseline gap-2">
+        <span class="term-dim shrink-0" title="${esc(e.timestamp)}">[${esc(clock(e.timestamp))}]</span>
+        <span class="${cls} shrink-0 font-semibold">${won ? "🤝 " : ""}${esc(e.action)}</span>
+        ${e.status ? `<span class="${cls} shrink-0 opacity-80">${esc(e.status)}</span>` : ""}
+        ${e.drift ? `<span class="term-warn shrink-0">⚠DRIFT</span>` : ""}
+        <span class="term-dim ml-auto shrink-0">#${esc(e.seq)}</span>
+      </div>
+      <p class="mt-0.5 ${won ? "term-ok font-semibold" : "text-slate-200"}"><span class="term-dim">&gt;</span> ${esc(e.summary)}</p>
+      <p class="truncate text-[10px] term-dim">${esc(e.actor)} · sha256:${esc(e.hash.slice(0, 12))}</p>
+      ${expl}
+    </li>`;
+  }
+  // The feed shows the purchasing lifecycle only. SYSTEM (logins, chat and voice questions, startup), SEARCH,
+  // WEBHOOK, OFFER, SUBSTITUTION and TRUST_* entries are hidden here but stay in the hash chain, in "Verify chain" and in each
+  // order's full audit trail. OFFER has its own widget; substitutions show on the approval cards
+  // (one quote can log many of them, which would flood the feed).
+  const FEED_ACTIONS = new Set([
+    "QUOTE", "ORDER_SUBMITTED", "POLICY_DECISION", "APPROVAL", "REJECTION", "ORDER_PLACED",
+    "APPROVED_BY_AI_SECRETARY", "REJECTED_BY_AI_SECRETARY", "NEGOTIATION_WON", "NEGOTIATION_LOST",
+    "LAST_MINUTE_EVENT_ORDER", "ORDERED_BY_AI_SECRETARY", "QUICK_ORDER",
+  ]);
+  const inFeed = (e) => FEED_ACTIONS.has(e.action);
+
+  function renderAudit() {
+    $("audit").innerHTML = S.audit.map((e) => auditItem(e, false)).join("")
+      || `<li class="px-4 py-10 text-center text-sm text-slate-500">No purchasing activity yet.</li>`;
+  }
+  function addAudit(e, live) {
+    if (S.seenSeq.has(e.seq)) return;
+    S.seenSeq.add(e.seq);
+    if (!inFeed(e)) return;
+    S.audit.unshift(e);
+    if (S.audit.length > 200) S.audit.pop();
+    const list = $("audit");
+    if (list.firstElementChild && !list.firstElementChild.dataset.audit && list.children.length === 1 && !S.audit[1]) list.innerHTML = "";
+    list.insertAdjacentHTML("afterbegin", auditItem(e, live));
+    while (list.children.length > 200) list.lastElementChild.remove();
+  }
+  const syncExplainToggle = () => $("toggle-explain").setAttribute("aria-checked", String(S.explain));
+  $("toggle-explain").addEventListener("click", () => {
+    S.explain = !S.explain; store.set("va_explain", S.explain ? "on" : "off", true);
+    syncExplainToggle(); renderAudit();
+  });
+
+  // ======================================================================== offers (#7)
+  // Open offers by default; accepted / withdrawn / expired ones live behind "Show history"
+  const offerIsOpen = (o) => (o.status || "OPEN") === "OPEN";
+  S.offerHistory = store.get("va_offer_history", true) === "on";
+  const HISTORY_BADGE = {
+    ACCEPTED: (o) => badge(`🤝 Accepted & negotiated${o.accepted_by ? ` by ${o.accepted_by}` : ""}`, "bg-green-500/15 text-green-300 ring-green-400/40"),
+    WITHDRAWN: () => badge("Withdrawn", "bg-slate-500/15 text-gray-400 ring-slate-500/40"),
+    EXPIRED: () => badge("Expired", "bg-slate-500/15 text-gray-400 ring-slate-500/40"),
+  };
+  function offerRow(o, inactive) {
+    const status = o.status || "OPEN";
+    return `
+      <button type="button" data-spot="offer" data-spot-id="${esc(o.offer_id)}" title="${inactive ? "View past offer" : "Open offer details"}"
+              class="${o._new ? "fade-in " : ""}${inactive ? "opacity-50 text-gray-500 hover:opacity-80 " : ""}flex w-full items-start justify-between gap-3 px-4 py-3 text-left transition-opacity hover:bg-white/[0.04]">
+        <div class="min-w-0">
+          <p class="truncate text-sm ${inactive ? "text-gray-500 line-through decoration-gray-600/60" : "text-slate-100"}">${esc(o.name)}</p>
+          <p class="text-[11px] ${inactive ? "text-gray-500" : "text-slate-500"}"><span class="font-mono">${esc(o.productId)}</span> · ${esc(num(o.quantity_available))} ${esc(o.salesUnit)} ·
+            until ${esc(o.valid_until)}${o.target_agent_id ? ` · for ${esc(o.target_agent_id)}` : ""}</p>
+          ${inactive ? `<div class="mt-1">${(HISTORY_BADGE[status] || HISTORY_BADGE.EXPIRED)(o)}</div>`
+                     : `<p class="text-[11px] text-slate-400">${esc(o.reason)}</p>`}
+        </div>
+        <div class="shrink-0 text-right">
+          <p class="text-lg font-semibold ${inactive ? "text-gray-500" : "text-cyan-300"}">−${esc(o.discount_pct)}%</p>
+          ${inactive ? "" : badge("open", STATUS.OPEN)}
+        </div>
+      </button>`;
+  }
+  function renderOffers() {
+    const all = S.offers.slice(0, 40);
+    const open = all.filter(offerIsOpen), past = all.filter((o) => !offerIsOpen(o));
+    const btn = $("offers-history");
+    btn.textContent = S.offerHistory ? "Hide history" : `Show history${past.length ? ` (${past.length})` : ""}`;
+    btn.setAttribute("aria-pressed", String(S.offerHistory));
+    btn.classList.toggle("hidden", !past.length && !S.offerHistory);
+    let html = open.map((o) => offerRow(o, false)).join("")
+      || `<p class="px-4 py-5 text-center text-xs text-slate-500">${past.length ? "No open offers right now." :
+           `No offers yet. Valio pushes surplus stock via <code class="font-mono">POST /v1/offers/proactive</code>.`}</p>`;
+    if (S.offerHistory && past.length) {
+      html += `<div class="bg-white/[0.02] px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">History</div>`
+            + past.map((o) => offerRow(o, true)).join("");
+    }
+    $("offers").innerHTML = html;
+    S.offers.forEach((o) => delete o._new);
+  }
+  $("offers-history").addEventListener("click", () => {
+    S.offerHistory = !S.offerHistory;
+    store.set("va_offer_history", S.offerHistory ? "on" : "off", true);
+    renderOffers();
+  });
+
+  // ======================================================================== drawer
+  async function openAudit(id) {
+    $("drawer-title").textContent = id;
+    $("drawer-body").innerHTML = `<p class="text-slate-500">Loading…</p>`;
+    $("drawer").classList.remove("hidden"); document.body.style.overflow = "hidden";
+    try {
+      const md = await api(`/v1/audit/${encodeURIComponent(id)}`, { text: true });
+      S.markdown = md; S.mdOrder = id;
+      // audit data contains agent-supplied text: always sanitize before rendering
+      $("drawer-body").innerHTML = window.marked && window.DOMPurify ? DOMPurify.sanitize(marked.parse(md, { gfm: true })) : `<pre>${esc(md)}</pre>`;
+    } catch (e) { $("drawer-body").innerHTML = `<p class="text-rose-400">Could not load: ${esc(e.message)}</p>`; }
+  }
+  const closeDrawer = () => { $("drawer").classList.add("hidden"); document.body.style.overflow = ""; };
+  $("drawer-close").addEventListener("click", closeDrawer);
+  $("drawer-backdrop").addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+  $("drawer-download").addEventListener("click", () => {
+    if (!S.markdown) return;
+    const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob([S.markdown], { type: "text/markdown" })), download: `audit_${S.mdOrder}.md` });
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  // ======================================================================== delegated events
+  document.addEventListener("click", (e) => {
+    const dec = e.target.closest("[data-decide]");
+    if (dec) { const id = dec.dataset.id;
+      decide(id, dec.dataset.decide, dec.dataset.remember === "1", [...document.querySelectorAll(`[data-id="${CSS.escape(id)}"]`)]); return; }
+    const aud = e.target.closest("[data-audit]");
+    if (aud) { if (ov.open) closeOverlay({ then: () => openAudit(aud.dataset.audit) }); else openAudit(aud.dataset.audit); }
+  });
+  document.addEventListener("input", (e) => { if (e.target.dataset?.comment) S.drafts[e.target.dataset.comment] = e.target.value; });
+  $("btn-verify").addEventListener("click", async () => {
+    try {
+      const r = await (await fetch("/v1/audit/verify")).json();
+      r.chain.valid ? toast(`Chain verified: ${r.chain.entries} entries, signed checkpoint ${r.checkpoint.kid}.`, "ok")
+                    : toast(`Chain BROKEN at #${r.chain.broken_at_seq}: ${r.chain.reason}`, "err");
+      renderChain(r.chain);
+    } catch (ex) { toast(`Verification failed: ${ex.message}`, "err"); }
+  });
+  const renderChain = (c) => { $("chain").innerHTML = c.valid
+    ? `<span class="text-emerald-400">● chain verified</span> · ${esc(c.entries)} entries · head <span class="font-mono">${esc(c.head_hash.slice(0, 10))}…</span>`
+    : `<span class="text-rose-400">● chain BROKEN at #${esc(c.broken_at_seq)}</span>`; };
+
+  // ======================================================================== loading
+  async function refresh(parts = ["metrics", "approvals", "audit", "offers"]) {
+    const jobs = [];
+    if (parts.includes("metrics")) jobs.push(api("/v1/metrics").then(renderMetrics));
+    if (parts.includes("approvals")) jobs.push(api("/v1/approvals").then((r) => renderPending(r.orders)));
+    // Fetch a wider window, since hidden SYSTEM/SEARCH/WEBHOOK entries would otherwise crowd out purchasing ones
+    if (parts.includes("audit")) jobs.push(api("/v1/audit?limit=300").then((r) => {
+      S.seenSeq = new Set(r.entries.map((e) => e.seq));
+      S.audit = r.entries.filter(inFeed).slice(0, 80);
+      renderAudit(); renderChain(r.chain); }));
+    if (parts.includes("offers")) jobs.push(api("/v1/proactive-offers").then((r) => { S.offers = r.offers; renderOffers(); }));
+    const results = await Promise.allSettled(jobs);
+    const failed = results.find((r) => r.status === "rejected" && r.reason?.status !== 401);
+    if (failed) toast(`Refresh failed: ${failed.reason.message}`, "err");
+  }
+
+  // Shimmering placeholders until the first data arrives (each renderer replaces its own skeleton)
+  function renderSkeletons() {
+    const sk = (cls) => `<div class="skel ${cls}"></div>`;
+    $("tiles").innerHTML = Array.from({ length: 8 }, () =>
+      `<div class="card space-y-2 p-4">${sk("h-3 w-24")}${sk("h-7 w-20")}${sk("h-3 w-32")}</div>`).join("");
+    $("trust").innerHTML = Array.from({ length: 2 }, () =>
+      `<div class="space-y-2">${sk("h-3 w-2/3")}<div class="flex gap-1">${sk("h-2 flex-1")}${sk("h-2 flex-1")}${sk("h-2 flex-1")}</div>${sk("h-2.5 w-1/2")}</div>`).join("");
+    $("pending").innerHTML = Array.from({ length: 2 }, () =>
+      `<div class="card space-y-3 p-5">${sk("h-4 w-1/3")}${sk("h-3 w-2/3")}${sk("h-12 w-full")}<div class="flex justify-end gap-2">${sk("h-9 w-20")}${sk("h-9 w-24")}</div></div>`).join("");
+    $("offers").innerHTML = Array.from({ length: 2 }, () => `<div class="space-y-2 px-4 py-3">${sk("h-3 w-2/3")}${sk("h-2.5 w-1/2")}</div>`).join("");
+    $("audit").innerHTML = Array.from({ length: 8 }, (_, i) =>
+      `<li class="space-y-1.5 px-4 py-2.5"><div class="skel h-2.5" style="width:${55 + ((i * 17) % 35)}%"></div><div class="skel h-2 w-1/3 opacity-60"></div></li>`).join("");
+  }
+
+  async function start() {
+    $("login").classList.add("hidden"); $("login").classList.remove("flex");
+    $("app").classList.remove("hidden");
+    $("who").textContent = S.user;
+    $("who-role").innerHTML = isManager() ? `<span class="text-sky-300">Manager · read/write</span>` : `<span class="text-amber-300">Auditor · read-only</span>`;
+    $("auditor-banner").classList.toggle("hidden", isManager());
+    $("chat-fab").classList.remove("hidden"); $("chat-fab").classList.add("grid");
+    S.pendingSig = "";
+    syncExplainToggle();
+    renderSkeletons();
+    await refresh();
+    playGreeting();                        // no-op unless this is a fresh login
+    if (S.token) connectWs();
+  }
+
+  // ======================================================================== Voice Secretary chat (Gemini)
+  const chat = { open: false, busy: false };
+  const sparkle = (cls) => `<svg class="${cls}" aria-hidden="true"><use href="#sparkle"/></svg>`;
+  function toggleChat(force) {
+    const next = force ?? !chat.open;
+    // While the full-screen overlay is open the conversation lives there: remember to reopen the widget later
+    if (next && ov.open) { ov.restoreWidget = true; $("ov-input").focus(); return; }
+    chat.open = next;
+    $("chat").classList.toggle("hidden", !chat.open);
+    $("chat").classList.toggle("flex", chat.open);
+    $("chat-fab").setAttribute("aria-expanded", String(chat.open));
+    if (chat.open) $("chat-input").focus();
+  }
+  function chatBubble(role) {
+    const el = document.createElement("div");
+    if (role === "user") {
+      el.className = "fade-in ml-10 rounded-xl rounded-br-sm bg-indigo-500/20 px-3 py-2 text-sm text-indigo-50";
+    } else {
+      el.className = "fade-in mr-2 flex gap-2.5";
+      el.innerHTML = `${sparkle("mt-1 h-5 w-5 shrink-0")}<div class="chat-md min-w-0 flex-1 rounded-xl rounded-tl-sm bg-ink-850 px-3 py-2 text-sm leading-relaxed text-slate-200"></div>`;
+    }
+    el.dataset.role = role;
+    $("chat-log").appendChild(el);
+    $("chat-log").scrollTop = $("chat-log").scrollHeight;
+    syncCompact();
+    return role === "user" ? el : el.lastElementChild;
+  }
+  const thinking = (label) => `<span class="flex items-center gap-2 text-slate-400">${sparkle("spark-pulse h-4 w-4")}${esc(label)}</span>`;
+  function renderAnswer(out, r) {
+    // Model output can echo agent-supplied log text, so it is always sanitized before rendering
+    const html = window.marked && window.DOMPurify ? DOMPurify.sanitize(marked.parse(r.answer)) : esc(r.answer);
+    const seq = r.context_seq || [];
+    // Sleek badge; model + source audit entries stay available on hover for traceability
+    const detail = `${r.model} · ${r.context_entries} recent decision(s)${seq.length ? ` (#${seq[0]}–#${seq[seq.length - 1]})` : ""} · ${r.pending_in_context ?? 0} pending order(s)`;
+    out.innerHTML = html + `<div class="mt-2"><span title="${esc(detail)}"
+      class="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-violet-500/20 to-fuchsia-500/20 px-2 py-0.5 text-[10px] font-semibold text-violet-200 ring-1 ring-inset ring-violet-400/40">✨ Gemini AI</span></div>`;
+    $("chat-model").textContent = r.model;
+  }
+  function chatError(out, e) {
+    const msg = e.status === 503 ? `The assistant isn't configured on the server: ${e.message}`
+      : e.status === 429 ? "Too many questions in a minute. Please wait a moment."
+      : `Sorry, I couldn't answer: ${e.message}`;
+    out.innerHTML = `<span class="text-rose-300">${esc(msg)}</span>`;
+    speak(msg);
+  }
+  function setBusy(on) {
+    chat.busy = on;
+    if (on && typeof hf !== "undefined" && hf.on) hfPause();   // hands-free: never listen while the AI works
+    $("chat-send").disabled = on;
+    $("ov-send").disabled = on;
+    document.querySelectorAll("[data-quick]").forEach((b) => (b.disabled = on));
+    if (!on) $("chat-log").scrollTop = $("chat-log").scrollHeight;
+  }
+
+  // mode "voice" asks Gemini for short spoken sentences (no Markdown) because the reply is read aloud
+  const YES = /^\s*(yes|yeah|yep|yup|sure|ok(ay)?|confirm(ed)?|do it|go ahead|please do|approve it|reject it|kyllä|joo)(?![\p{L}\p{N}])/iu;
+  // (?![\p{L}\p{N}]) = whole word only (Unicode-aware, so "kyllä" works): "now…" is NOT "no", "yesterday" is NOT "yes"
+  const NO = /^\s*(no|nope|cancel|stop|don'?t|never mind|ei)(?![\p{L}\p{N}])/iu;
+  async function ask(question, mode = "text") {
+    const q = (question || "").trim();
+    if (!q || chat.busy) return;
+    if (chat.pending && (YES.test(q) || NO.test(q))) {
+      chatBubble("user").textContent = (mode === "voice" ? "🎤 " : "") + q;
+      return confirmAction(chat.pending.action_id, YES.test(q));
+    }
+    // The assistant offered to show something ("…Would you like me to show them?"): yes/no is matched in code
+    if (chat.offer && (YES.test(q) || NO.test(q))) {
+      const o = chat.offer;
+      chat.offer = null;
+      chatBubble("user").textContent = (mode === "voice" ? "🎤 " : "") + q;
+      const out = chatBubble("bot");
+      const reply = !YES.test(q) ? "Okay. What else can I help you with?"
+        : o.element === "offer" ? "Opening the offer for you." : o.id ? "Here it is." : "Here they are.";
+      out.innerHTML = `<p>${esc(reply)}</p>`;
+      speak(reply);
+      if (YES.test(q)) openSpotlight(o.element, o.id || "", "");
+      return;
+    }
+    chat.offer = null;                       // any other question drops the offer
+    setBusy(true);
+    stopSpeaking();
+    chatBubble("user").textContent = (mode === "voice" ? "🎤 " : "") + q;
+    const out = chatBubble("bot");
+    out.innerHTML = thinking("Auditing hash-chain…");
+    try {
+      const r = await api("/v1/chat/explain", { method: "POST", body: { question: q, mode } });
+      renderAnswer(out, r);
+      handleActions(out, r.actions);
+      if (r.type === "ui_action") openSpotlight(r.element, r.id, r.text);
+      speak(r.type === "ui_action" ? (r.text || r.answer) : r.answer);
+    } catch (e) { chatError(out, e); }
+    finally { setBusy(false); }
+  }
+
+
+  // ------------------------------------------------------------------ AI secretary actions (tool calls)
+  function handleActions(out, actions) {
+    (actions || []).forEach((a) => {
+      if (a.type === "pending") {
+        chat.pending = a;
+        const verb = a.decision === "approve" ? "Approve" : a.decision === "order" ? "Place order" : "Reject";
+        const card = document.createElement("div");
+        card.className = "mt-2 rounded-lg border border-violet-400/40 bg-violet-500/10 p-2.5";
+        card.innerHTML = `<p class="text-[11px] font-semibold uppercase tracking-wider text-violet-300">Needs your confirmation</p>
+          <p class="mt-1 text-sm text-white">${esc(verb)} <span class="font-mono text-xs">${esc(a.order_id)}</span>
+             · €${esc((a.summary.net_total_eur ?? 0).toLocaleString("en-IE", { minimumFractionDigits: 2 }))}</p>
+          <p class="text-xs text-slate-300">${esc(a.summary.contents)}</p>
+          <p class="text-xs text-slate-400">Reason: ${esc(a.reason)}</p>
+          <div class="mt-2 flex gap-2">
+            <button data-act="${esc(a.action_id)}" data-confirm="1" class="rounded-md bg-violet-600 px-3 py-1 text-xs font-semibold text-white hover:bg-violet-500 disabled:opacity-50">Confirm ${esc(verb.toLowerCase())}</button>
+            <button data-act="${esc(a.action_id)}" data-confirm="0" class="rounded-md border border-ink-600 px-3 py-1 text-xs text-slate-300 hover:bg-ink-800 disabled:opacity-50">Cancel</button>
+            <span class="self-center text-[10px] text-slate-500">or say "yes" / "no"</span>
+          </div>`;
+        out.appendChild(card);
+      } else if (a.type === "catalog") {
+        out.appendChild(catalogCard(a));
+      } else if (a.type === "contact") {
+        out.appendChild(contactCard(a));
+      } else if (a.type === "ui_action") {
+        const chip = document.createElement("button");
+        chip.className = "mt-2 inline-flex items-center gap-1.5 rounded-full border border-indigo-400/40 bg-indigo-500/10 px-2.5 py-1 text-[11px] text-indigo-200 hover:bg-indigo-500/20";
+        chip.dataset.spot = a.element; chip.dataset.spotId = a.id || ""; chip.dataset.spotText = a.text || "";
+        chip.textContent = `👁 Showing: ${SPOT_TITLES[a.element] || a.element}${a.id ? ` (${a.id})` : ""} · Reopen`;
+        out.appendChild(chip);
+      } else if (a.type === "executed") {
+        toast(a.ok ? a.message : `AI secretary: ${a.message || a.error}`, a.ok ? "ok" : "err");
+        if (a.ok) refreshAfterAction();
+      }
+    });
+    $("chat-log").scrollTop = $("chat-log").scrollHeight;
+  }
+  // Verified contact details, rendered from contacts.yaml data (never from model-written text)
+  function contactCard(c) {
+    const box = document.createElement("div");
+    box.className = "mt-2 rounded-xl border border-emerald-400/30 bg-emerald-500/[0.07] p-3";
+    const phones = (c.phones || []).map((p) => `<li class="flex items-center gap-2">☎️
+        <a class="tabular-nums text-sky-300 hover:underline" href="tel:${esc(String(p.number).replace(/\s+/g, ""))}">${esc(p.number)}</a>
+        ${p.language ? `<span class="text-xs text-slate-400">${esc(p.language)}</span>` : ""}</li>`).join("");
+    box.innerHTML = `<div class="flex items-center justify-between gap-2">
+        <p class="text-sm font-semibold text-white">📞 ${esc(c.department)}</p>
+        <span class="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-200 ring-1 ring-inset ring-emerald-400/40">✓ verified contact</span></div>
+      ${c.verified_for_topic === false && c.note ? `<p class="mt-1 text-[11px] leading-snug text-amber-200/90">${esc(c.note)}</p>` : ""}
+      <ul class="!mb-0 !ml-0 !mr-0 !mt-2 !list-none space-y-1 !p-0 text-sm">
+        ${c.email ? `<li class="flex items-center gap-2">✉️ <a class="text-sky-300 hover:underline" href="mailto:${esc(c.email)}">${esc(c.email)}</a></li>` : ""}
+        ${phones}
+      </ul>`;
+    return box;
+  }
+
+  // search_catalog results as a clean bulleted product list. Managers get a quantity box + "Order" button per
+  // product: it runs the same place_order flow as Gemini's tool (live price, guardrails, then Confirm / "yes").
+  const AVAIL_CLS = { AVAILABLE: "text-emerald-300", PARTIAL: "text-amber-300", OUT_OF_STOCK: "text-rose-300", BLOCKED: "text-rose-300" };
+  const UNORDERABLE = new Set(["OUT_OF_STOCK", "BLOCKED"]);
+  function catalogCard(a) {
+    const box = document.createElement("div");
+    box.className = "mt-2 overflow-hidden rounded-xl border border-white/10 bg-white/[0.03]";
+    const mgr = isManager();
+    const rows = (a.results || []).map((r) => {
+      const blocked = UNORDERABLE.has(r.availability);
+      const allergens = (r.allergens || []).length ? ` · <span class="text-amber-200/80">contains ${esc(r.allergens.join(", ").toLowerCase())}</span>` : "";
+      return `<li data-cat-row class="flex items-start gap-2.5 border-b border-white/5 px-3 py-2 last:border-0">
+        <span class="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-300/80" aria-hidden="true"></span>
+        <div class="min-w-0 flex-1">
+          <p class="text-[13px] leading-snug text-slate-100">${esc(r.name)}</p>
+          <p class="mt-0.5 text-[11px] leading-snug text-slate-400">
+            <span class="font-mono text-slate-500">${esc(r.product_id)}</span> · ${esc(r.pack)} ·
+            <span class="tabular-nums text-white">${r.price_eur_per_sales_unit != null ? esc(eur(r.price_eur_per_sales_unit)) : "no price"}</span>
+            · <span class="${AVAIL_CLS[r.availability] || "text-slate-400"}">${esc(String(r.availability || "unknown").replaceAll("_", " ").toLowerCase())}</span>${allergens}</p>
+        </div>
+        ${mgr ? `<div class="flex shrink-0 items-center gap-1 self-center">
+          <input type="number" min="1" step="1" value="1" aria-label="Quantity of ${esc(r.name)} (${esc(r.sales_unit || "packs")})"
+                 title="Quantity in ${esc(r.sales_unit || "packs")}"
+                 class="h-7 w-14 rounded-md border border-white/15 bg-ink-950/60 px-1.5 text-right text-xs tabular-nums text-white focus:border-indigo-400 focus:outline-none">
+          <button type="button" data-order-pid="${esc(r.product_id)}" data-order-name="${esc(r.name)}" data-order-unit="${esc(r.sales_unit || "")}"
+                  ${blocked ? `disabled title="Not available for the next delivery"` : `title="Order this product"`}
+                  class="h-7 rounded-md bg-gradient-to-r from-sky-500 to-indigo-500 px-2.5 text-xs font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">Order</button>
+        </div>` : ""}
+      </li>`;
+    }).join("");
+    box.innerHTML = `<p class="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+        <span class="truncate">🔎 Catalog · “${esc(a.query)}”</span>
+        <span class="shrink-0 normal-case tracking-normal text-slate-500">${(a.results || []).length} result(s)${a.availability_for ? ` · stock for ${esc(a.availability_for)}` : ""}</span></p>`
+      + (rows ? `<ul class="!m-0 !list-none !p-0">${rows}</ul>` : `<p class="px-3 py-3 text-xs text-slate-400">No matching products.</p>`);
+    return box;
+  }
+  // "Order" -> POST /v1/agent/quick-order: one click places it through the guardrails (no second confirm:
+  // the click is the manager's decision). The guardrails may still hold or block it, and the button says so.
+  const SPINNER = `<svg class="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-opacity=".25" stroke-width="3"/>
+      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>`;
+  const ORDER_DONE = {
+    PLACED:           { label: "✅ Ordered!",          cls: "!bg-none !bg-emerald-600",      toast: "ok" },
+    PENDING_APPROVAL: { label: "⏳ Needs approval",    cls: "!bg-none !bg-amber-500 !text-ink-950", toast: "warn" },
+    REJECTED:         { label: "✖ Blocked",            cls: "!bg-none !bg-rose-600",         toast: "err" },
+  };
+  S.quickOrdersInFlight = 0;
+  function systemNote(html, tone = "ok") {                  // a system line in the shared chat log
+    const out = chatBubble("bot");
+    const cls = { ok: "border-emerald-400/30 bg-emerald-500/10 text-emerald-100", warn: "border-amber-400/30 bg-amber-400/10 text-amber-100",
+                  err: "border-rose-400/30 bg-rose-500/10 text-rose-100" }[tone];
+    out.innerHTML = `<div class="rounded-lg border ${cls} px-3 py-2 text-sm leading-relaxed">${html}</div>`;
+    const log = $("chat-log");
+    log.scrollTo({ top: log.scrollHeight, behavior: "smooth" });   // after the content exists, so it's fully in view
+    return out;
+  }
+  async function orderFromCatalog(btn) {
+    const row = btn.closest("[data-cat-row]"), qtyInput = row?.querySelector("input");
+    const qty = Number(qtyInput?.value);
+    if (!(qty > 0)) { toast("Enter a quantity first.", "warn"); qtyInput?.focus(); return; }
+    const name = btn.dataset.orderName, unit = btn.dataset.orderUnit || "pcs";
+    btn.disabled = true; if (qtyInput) qtyInput.disabled = true;
+    btn.innerHTML = `<span class="inline-flex items-center gap-1.5">${SPINNER}Ordering…</span>`;
+    S.quickOrdersInFlight++;
+    try {
+      const r = await api("/v1/agent/quick-order", { method: "POST", body: { product_id: btn.dataset.orderPid, quantity: qty } });
+      const look = ORDER_DONE[r.status] || ORDER_DONE.PENDING_APPROVAL;
+      btn.innerHTML = look.label;
+      btn.className = `${btn.className} ${look.cls} disabled:!cursor-default disabled:!opacity-100`;   // stays disabled: no accidental double order
+      btn.title = r.message;
+      const what = `${esc(num(r.quantity))} ${esc(r.sales_unit || unit)} of <b>${esc(r.product)}</b>`;
+      const total = esc(eur(r.net_total_eur));
+      if (r.status === "PLACED") {
+        toast(`Order placed successfully: ${num(r.quantity)} × ${r.product} (${eur(r.net_total_eur)})`, "ok");
+        systemNote(`✅ I have successfully placed the order for <b>${esc(r.product)}</b>: ${esc(num(r.quantity))} ${esc(r.sales_unit || unit)}, ${total}, delivery ${esc(r.delivery_date)}`
+          + `${r.confirmation_number ? `, confirmation <span class="font-mono">${esc(r.confirmation_number)}</span>` : ""}.`
+          + `${r.negotiation?.status === "NEGOTIATION_WON" ? ` The agent negotiated a bulk deal and saved ${esc(eur(r.negotiation.saved_amount))}.` : ""}`);
+        speak(`I have successfully placed the order for ${r.product}.`);
+      } else if (r.status === "PENDING_APPROVAL") {
+        toast(`Order submitted, but it needs approval: ${r.product}`, "warn");
+        systemNote(`⏳ I submitted the order for ${what} (${total}), but the guardrails sent it for human approval: ${esc(r.explanation)}`
+          + ` You'll find it under <b>Pending approvals</b>.`, "warn");
+        speak(`I submitted the order for ${r.product}, but it needs approval first.`);
+      } else {
+        toast(`Order blocked by the guardrails: ${r.product}`, "err");
+        systemNote(`✖ The guardrails blocked the order for ${what}: ${esc(r.explanation)}`, "err");
+        speak(`The guardrails blocked the order for ${r.product}.`);
+      }
+      S.pendingSig = "";
+      refresh(["approvals", "metrics", "audit"]);           // the websocket pushes this too; this covers a dropped socket
+    } catch (e) {
+      btn.disabled = false; if (qtyInput) qtyInput.disabled = false;
+      btn.textContent = "Order";
+      const d = e.body?.detail;
+      if (e.status === 409 && d?.unavailable) {           // unavailable: offer real alternatives or the verified contact
+        btn.textContent = "Unavailable"; btn.disabled = true; btn.title = d.detail || "";
+        toast(`Not available: ${d.detail || name}`, "warn");
+        const note = systemNote(`⚠️ ${esc(d.detail || `${name} isn't available right now.`)} Would you like to contact `
+          + `Valio Aimo Sales Service, or choose an available alternative?`, "warn");
+        const chips = (d.alternatives || []).map((a) => ({
+          label: `${a.name.slice(0, 38)} · ${eur(a.price_eur_per_sales_unit)}`, say: `Order ${qty} of ${a.name} (${a.product_id})` }));
+        if (d.earliest_delivery) chips.unshift({ label: `Deliver on ${d.earliest_delivery} instead`,
+          say: `Order ${qty} of ${name} (${btn.dataset.orderPid}) for delivery on ${d.earliest_delivery}` });
+        if (chips.length) note.appendChild(suggestionChips(chips));
+        if (d.contact) {
+          const call = document.createElement("button");
+          call.type = "button";
+          call.className = "mt-2 rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-100 hover:bg-emerald-500/20";
+          call.textContent = `📞 Contact ${d.contact.department}`;
+          call.addEventListener("click", () => { call.replaceWith(contactCard(d.contact)); }, { once: true });
+          note.appendChild(call);
+        }
+        speak("That isn't available. Would you like to contact Valio Aimo Sales Service, or choose an available alternative?");
+        return;
+      }
+      const msg = e.status === 403 ? "Only managers can place orders." : e.message;
+      toast(`Couldn't place the order: ${msg}`, "err");
+      systemNote(`✖ I couldn't place the order for <b>${esc(name)}</b>: ${esc(msg)}`, "err");
+    } finally {
+      setTimeout(() => { S.quickOrdersInFlight = Math.max(0, S.quickOrdersInFlight - 1); }, 1500);
+    }
+  }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-order-pid]");
+    if (b && !b.disabled) orderFromCatalog(b);
+  });
+  document.addEventListener("keydown", (e) => {          // Enter in a quantity box = press its Order button
+    if (e.key !== "Enter" || !e.target.closest?.("[data-cat-row] input")) return;
+    e.preventDefault();
+    const b = e.target.closest("[data-cat-row]").querySelector("[data-order-pid]");
+    if (b && !b.disabled) orderFromCatalog(b);
+  });
+  function refreshAfterAction() { S.pendingSig = ""; refresh(["approvals", "metrics", "audit"]); }   // fetchPendingOrders()
+  async function confirmAction(actionId, confirm) {
+    if (chat.busy) return;
+    setBusy(true);
+    document.querySelectorAll(`[data-act="${CSS.escape(actionId)}"]`).forEach((b) => (b.disabled = true));
+    const out = chatBubble("bot");
+    out.innerHTML = thinking(confirm ? "Executing…" : "Cancelling…");
+    try {
+      const r = await api(`/v1/chat/actions/${encodeURIComponent(actionId)}`, { method: "POST", body: { confirm } });
+      out.innerHTML = `<span class="${r.ok ? "text-emerald-300" : "text-rose-300"}">${esc(r.message || r.error)}</span>`;
+      speak(r.message || r.error);
+      if (r.ok && r.status === "done") { toast(r.message, "ok"); refreshAfterAction(); }
+    } catch (e) {
+      const msg = e.status === 410 ? "That proposal expired. Please ask me again."
+        : e.status === 403 ? "Only managers can confirm actions." : `Couldn't complete it: ${e.message}`;
+      out.innerHTML = `<span class="text-rose-300">${esc(msg)}</span>`;
+      speak(msg);
+    } finally {
+      chat.pending = null;
+      setBusy(false);
+    }
+  }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-act]");
+    if (b && !b.disabled) confirmAction(b.dataset.act, b.dataset.confirm === "1");
+  });
+
+  // ------------------------------------------------------------------ master full-screen overlay
+  // ONE conversation: #chat-log (+ the listening bar) is physically moved between the widget and the overlay,
+  // so both views always show the same messages, confirmation cards and chips. Both inputs call ask() ->
+  // /v1/chat/explain, which appends to that same list.
+  const GREET_KEY = "va_greet";
+  const ov = { open: false, restoreWidget: false, typer: null, gen: 0 };
+  const OV_FADE_MS = 470;
+  const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const displayName = (u) => (u || "there").replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  const activeInput = () => (ov.open ? $("ov-input") : $("chat-input"));
+
+  function moveLog(toOverlay) {
+    const log = $("chat-log"), status = $("voice-status");
+    if (toOverlay) $("ov-log-slot").append(log, status);
+    else { const anchor = $("chat-quick"); $("chat").insertBefore(log, anchor); $("chat").insertBefore(status, anchor); }
+    log.scrollTop = log.scrollHeight;
+  }
+  // The dashboard's own chart boxes (same canvases, same Chart.js instances, same live data) are moved
+  // into the overlay's compact row and back again: nothing is duplicated, so live updates keep flowing.
+  const OV_CHARTS = [["deciders-box", "orders"], ["deciders-empty", "orders"], ["daily-box", "spend"], ["trust", "trust"]];
+  const chartHomes = new Map();
+  function resizeCharts() {
+    requestAnimationFrame(() => { try { S.charts.d?.resize(); S.charts.b?.resize(); } catch (e) { console.warn(e); } });
+  }
+  function moveCharts(toOverlay) {
+    OV_CHARTS.forEach(([id, slot]) => {
+      const el = $(id);
+      if (!el) return;
+      if (toOverlay) {
+        if (chartHomes.has(id)) return;
+        const mark = document.createComment(`home:${id}`);
+        el.before(mark);
+        chartHomes.set(id, mark);
+        document.querySelector(`[data-ovslot="${slot}"]`).appendChild(el);
+      } else if (chartHomes.has(id)) {
+        chartHomes.get(id).replaceWith(el);
+        chartHomes.delete(id);
+      }
+    });
+    if (S.charts.d) {                       // a small card fits the legend better beside the ring
+      S.charts.d.options.plugins.legend.position = toOverlay ? "right" : "bottom";
+      S.charts.d.update("none");
+    }
+    resizeCharts();
+  }
+
+  // Big hero while there's no conversation yet; compact header + message list once there is one
+  function syncCompact() {
+    const root = $("ai-fullscreen-overlay"), was = root.classList.contains("ov-compact");
+    const now = !!$("chat-log").querySelector("[data-role]");
+    root.classList.toggle("ov-compact", now);
+    if (ov.open && was !== now) setTimeout(resizeCharts, 50);   // the chart row shrinks a little in compact mode
+  }
+  function typeTitle(line) {
+    const title = $("ov-title"), words = line.split(" ");
+    let i = 0;
+    clearInterval(ov.typer);
+    title.textContent = "";
+    if (reducedMotion()) { title.textContent = line; return; }
+    ov.typer = setInterval(() => { title.textContent = words.slice(0, ++i).join(" "); if (i >= words.length) clearInterval(ov.typer); }, 140);
+  }
+
+  function openOverlay({ greeting = false } = {}) {
+    const root = $("ai-fullscreen-overlay");
+    const gen = ++ov.gen;
+    if (!ov.open && chat.open) {                          // the widget hands its conversation to the overlay
+      ov.restoreWidget = true;
+      chat.open = false;
+      $("chat").classList.add("hidden"); $("chat").classList.remove("flex");
+      $("chat-fab").setAttribute("aria-expanded", "false");
+    }
+    ov.open = true;
+    moveLog(true);
+    moveCharts(true);
+    syncCompact();
+    root.classList.remove("hidden");
+    document.documentElement.style.overflow = "hidden";       // no dashboard scrollbar behind the overlay
+    $("chat-fab").style.opacity = "0";
+    $("chat-fab").style.pointerEvents = "none";
+    if (!greeting) $("app").classList.add("chat-full-blur");   // at login the dashboard is hidden (app-hidden) instead
+    void root.offsetWidth;                                     // commit the start state so the fade + scale run
+    root.classList.add("ov-open");
+    const name = displayName(S.user);
+    const line = greeting ? `Hello ${name}. I am your Valio Aimo AI Assistant. What would you like to do today?`
+                          : `What would you like to do next, ${name}?`;
+    typeTitle(line);
+    if (greeting) speak(line);                                 // respects the mute toggle
+    setTimeout(() => { if (ov.open && ov.gen === gen) { $("ov-input").focus({ preventScroll: true }); resizeCharts(); } }, 450);
+  }
+
+  // Fade the overlay out and the dashboard in. `then` runs once the dashboard is visible.
+  function closeOverlay({ immediate = false, then } = {}) {
+    if (!ov.open) { try { then?.(); } catch (e) { console.warn(e); } return; }
+    const root = $("ai-fullscreen-overlay"), fab = $("chat-fab");
+    const gen = ++ov.gen;
+    ov.open = false;
+    clearInterval(ov.typer);
+    root.classList.remove("ov-open");
+    $("app").classList.remove("chat-full-blur", "app-hidden");   // dashboard fades in while the overlay fades out
+    const reopenWidget = ov.restoreWidget || !!$("chat-log").querySelector("[data-role]");
+    ov.restoreWidget = false;
+    const finish = () => {
+      if (ov.gen !== gen) return;                                // reopened meanwhile
+      root.classList.add("hidden");
+      document.documentElement.style.overflow = "";
+      closeFocus({ immediate: true });                           // a focused chart goes back to its row first
+      moveLog(false);
+      moveCharts(false);
+      fab.style.opacity = ""; fab.style.pointerEvents = "";
+      fab.classList.remove("fab-land"); void fab.offsetWidth; fab.classList.add("fab-land");
+      if (reopenWidget) {
+        chat.open = true;
+        $("chat").classList.remove("hidden"); $("chat").classList.add("flex", "fade-in");
+        $("chat-fab").setAttribute("aria-expanded", "true");
+      }
+      try { then?.(); } catch (e) { console.warn("overlay action failed:", e); }
+    };
+    if (immediate || reducedMotion()) finish(); else setTimeout(finish, OV_FADE_MS);
+  }
+  // Anything that must be seen ON the dashboard (spotlight, chart modal) waits for the overlay to fade out
+  const afterOverlay = () => new Promise((resolve) => closeOverlay({ then: resolve }));
+
+  // Login: once per sign-in ("pending" set by the login form, "done" as soon as it plays, so a refresh never replays it)
+  function playGreeting() {
+    if (ov.open || store.get(GREET_KEY) !== "pending") return;
+    store.set(GREET_KEY, "done");
+    $("app").classList.add("app-hidden");
+    openOverlay({ greeting: true });
+  }
+  function skipGreeting() { closeOverlay({ immediate: true }); $("app").classList.remove("app-hidden"); }  // logout
+
+  // Quick actions are conversational shortcuts: the assistant OPENS the conversation with a question built
+  // from live data (POST /v1/chat/quick-action, instant, no LLM) and the manager answers by typing, speaking
+  // or tapping a suggestion chip. Nothing is pasted into the input box.
+  const OV_CAPS = {
+    dashboard: () => closeOverlay(),
+    order: (b) => quickAction("order", b),
+    approvals: (b) => quickAction("approvals", b),
+    charts: (b) => quickAction("charts", b),
+    offers: (b) => quickAction("offers", b),
+    trust: (b) => quickAction("trust", b),
+  };
+  async function quickAction(action, card) {
+    if (chat.busy) return;
+    stopSpeaking();
+    setBusy(true);
+    chat.offer = null;
+    const label = card?.querySelector("b")?.textContent?.trim() || action;
+    const you = chatBubble("user");
+    you.innerHTML = `<span class="text-indigo-200/80">⚡</span> ${esc(label)}`;
+    const out = chatBubble("bot");
+    out.innerHTML = thinking("One moment…");
+    try {
+      const [r] = await Promise.all([api("/v1/chat/quick-action", { method: "POST", body: { action } }),
+                                     new Promise((res) => setTimeout(res, 350))]);   // a beat, so it reads as a reply
+      chat.offer = r.offer || null;
+      out.innerHTML = `<p>${esc(r.answer)}</p>`;
+      if (r.suggestions?.length) out.appendChild(suggestionChips(r.suggestions));
+      speak(r.answer);
+    } catch (e) { chatError(out, e); }
+    finally {
+      setBusy(false);
+      $("chat-log").scrollTo({ top: $("chat-log").scrollHeight, behavior: "smooth" });
+      activeInput().value = "";
+      activeInput().focus({ preventScroll: true });
+    }
+  }
+  // Tappable answers under an assistant message; a tap sends that answer (once)
+  function suggestionChips(list) {
+    const row = document.createElement("div");
+    row.className = "mt-2 flex flex-wrap gap-1.5";
+    row.innerHTML = list.map((s) => `<button type="button" data-say="${esc(s.say)}"
+      class="rounded-full border border-indigo-400/40 bg-indigo-500/10 px-2.5 py-1 text-[11px] text-indigo-100 transition hover:bg-indigo-500/25 disabled:opacity-40">${esc(s.label)}</button>`).join("");
+    return row;
+  }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-say]");
+    if (!b || b.disabled || chat.busy) return;
+    b.parentElement.querySelectorAll("button").forEach((x) => (x.disabled = true));
+    ask(b.dataset.say);
+  });
+  document.querySelectorAll("[data-ovcap]").forEach((b) => b.addEventListener("click", () => OV_CAPS[b.dataset.ovcap]?.(b)));
+  $("ov-minimize").addEventListener("click", () => closeOverlay());
+  $("ov-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const v = $("ov-input").value;
+    $("ov-input").value = "";
+    ask(v);                                        // same ask() as the widget: the answer lands in the shared list
+  });
+  $("ov-mic").addEventListener("click", () => toggleListening());
+  $("chat-expand").addEventListener("click", () => openOverlay());
+  // Capture phase: Esc minimizes the overlay before anything behind it reacts (an open modal closes first)
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && ov.open && !modal.open) {
+      e.stopImmediatePropagation(); e.preventDefault(); stopSpeaking();
+      if (focus.on) closeFocus(); else closeOverlay();             // Esc steps back one level at a time
+    }
+  }, true);
+
+  // ------------------------------------------------------------------ Focus Mode (inside the overlay)
+  // A ui_action while the overlay is open: the chat column slides right, the REAL chart box (same canvas, same
+  // Chart.js instance) flies from the compact row to the centre stage and is resized there; lists and orders
+  // pop up as glass cards. "Back to Chat" plays it in reverse. FLIP animations via the Web Animations API.
+  const focus = { on: false, element: null, id: null, text: "", seq: 0, chart: null };
+  const FOCUS_CHARTS = {
+    spend_chart: { slot: "spend", ids: ["daily-box"] },
+    trust_levels: { slot: "trust", ids: ["trust"] },
+    order_decisions: { slot: "orders", ids: ["deciders-box", "deciders-empty"] },
+  };
+  const FLIP_MS = 520, EASE = "cubic-bezier(.4,0,.2,1)";
+  const rectOf = (el) => (el ? el.getBoundingClientRect() : null);
+  const resizeChartsNow = () => { try { S.charts.d?.resize(); S.charts.b?.resize(); } catch (e) { console.warn(e); } };
+
+  // Animate `el` from where it WAS (`first`) to where it is now
+  function flipFrom(el, first, { scale = false, fade = 1 } = {}) {
+    const last = rectOf(el);
+    if (!el || !first?.width || !last?.width) return;
+    const dx = first.left + first.width / 2 - (last.left + last.width / 2);
+    const dy = first.top + first.height / 2 - (last.top + last.height / 2);
+    const k = scale ? first.width / last.width : 1;
+    el.animate([{ transform: `translate(${dx}px, ${dy}px) scale(${k})`, opacity: fade },
+                { transform: "none", opacity: 1 }], { duration: FLIP_MS, easing: EASE });
+  }
+  const fadeIn = (el, ms = 420, delay = 0) => el?.animate([{ opacity: 0, transform: "translateY(8px) scale(.985)" }, { opacity: 1, transform: "none" }],
+                                                          { duration: ms, delay, easing: EASE, fill: "backwards" });
+  const fadeOut = (el, ms = 170) => el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: ms, easing: "ease-in", fill: "forwards" });
+
+  function returnFocusedChart() {
+    if (!focus.chart) return;
+    const c = FOCUS_CHARTS[focus.chart];
+    const slot = document.querySelector(`[data-ovslot="${c.slot}"]`);
+    c.ids.forEach((id) => { const el = $(id); if (el && el.parentElement !== slot) slot.appendChild(el); });
+    focus.chart = null;
+  }
+
+  // Fill the stage. Charts: move the real box in. Everything else: rendered by the spotlight's renderer.
+  function fillStage(element, id, text, seq) {
+    const body = $("ov-stage-body");
+    $("ov-stage-title").textContent = SPOT_TITLES[element] || "Dashboard";
+    $("ov-stage-text").textContent = text || "";
+    $("ov-stage-explain").classList.toggle("hidden", !text);
+    returnFocusedChart();
+    body.innerHTML = "";
+    const c = FOCUS_CHARTS[element];
+    if (c) {
+      c.ids.forEach((i) => { const el = $(i); if (el) body.appendChild(el); });
+      focus.chart = element;
+      resizeChartsNow();                     // synchronous: the FLIP below measures the final size
+      return;
+    }
+    body.innerHTML = thinking("Bringing it up…");
+    const stale = () => seq !== focus.seq || !focus.on;
+    renderSpot(element, id, seq, body, $("ov-stage-title"), stale)
+      .then(() => { if (!stale()) body.querySelectorAll(":scope > *").forEach((el, i) => fadeIn(el, 380, i * 40)); })
+      .catch((e) => { if (!stale()) body.innerHTML = `<p class="text-sm text-red-300">Couldn't load this view: ${esc(e.message)}</p>`; });
+  }
+
+  async function openFocus(element, id, text) {
+    const seq = ++focus.seq;
+    const root = $("ai-fullscreen-overlay"), stage = $("ov-stage"), body = $("ov-stage-body"), head = $("ov-stage-head");
+    const animate = !reducedMotion();
+    if (focus.on) {                                            // already focused: cross-fade to the new content
+      if (animate) {
+        const outs = [fadeOut(body), fadeOut(head)];
+        await Promise.all(outs.map((a) => a.finished.catch(() => {})));
+        if (seq !== focus.seq) return;
+        Object.assign(focus, { element, id: id || null, text: text || "" });
+        fillStage(element, id, text, seq);
+        outs.forEach((a) => a.cancel());
+        fadeIn(head, 360); fadeIn(body, 420, 60);
+      } else { Object.assign(focus, { element, id: id || null, text: text || "" }); fillStage(element, id, text, seq); }
+      return;
+    }
+    const movers = [$("ov-top"), $("ov-inputbar")];
+    const first = movers.map(rectOf);
+    const c = FOCUS_CHARTS[element];
+    const chartEl = c ? $(c.ids[0]) : null;
+    const chartFirst = rectOf(chartEl);
+    Object.assign(focus, { on: true, element, id: id || null, text: text || "" });
+    stage.classList.add("ov-stage-ghost");                     // the glass card fades in with the content
+    root.classList.add("ov-focus");
+    fillStage(element, id, text, seq);
+    $("chat-log").scrollTop = $("chat-log").scrollHeight;
+    if (animate) {
+      movers.forEach((m, i) => flipFrom(m, first[i], { fade: .35 }));
+      if (chartEl) flipFrom(chartEl, chartFirst, { scale: true, fade: .7 });
+      else fadeIn(body, 460, 120);
+      fadeIn(head, 420, 80);
+    }
+    requestAnimationFrame(() => stage.classList.remove("ov-stage-ghost"));
+    setTimeout(() => { if (focus.on && seq === focus.seq) resizeChartsNow(); }, FLIP_MS + 30);
+    $("ov-stage-back").focus({ preventScroll: true });
+  }
+
+  async function closeFocus({ immediate = false } = {}) {
+    if (!focus.on) return;
+    const seq = ++focus.seq;
+    const root = $("ai-fullscreen-overlay"), stage = $("ov-stage"), body = $("ov-stage-body"), head = $("ov-stage-head");
+    const animate = !immediate && !reducedMotion();
+    const c = focus.chart && FOCUS_CHARTS[focus.chart];
+    const chartEl = c ? $(c.ids[0]) : null;
+    let outs = [];
+    if (animate) {                                             // 1. the stage's text (and a list) fades out
+      stage.classList.add("ov-stage-ghost");
+      outs = [fadeOut(head), ...(chartEl ? [] : [fadeOut(body)])];
+      await Promise.all(outs.map((a) => a.finished.catch(() => {})));
+      if (seq !== focus.seq) return;
+    }
+    const movers = [$("ov-top"), $("ov-inputbar")];            // 2. layout swap, measured both sides (FLIP)
+    const first = movers.map(rectOf), chartFirst = rectOf(chartEl);
+    returnFocusedChart();
+    focus.on = false; focus.element = focus.id = null;
+    root.classList.remove("ov-focus");
+    stage.classList.remove("ov-stage-ghost");
+    outs.forEach((a) => a.cancel());
+    body.innerHTML = "";
+    resizeChartsNow();
+    if (animate) {                                             // 3. chat back to the centre, chart back to its row
+      movers.forEach((m, i) => flipFrom(m, first[i], { fade: .35 }));
+      if (chartEl) flipFrom(chartEl, chartFirst, { scale: true, fade: .8 });
+      fadeIn($("ov-main"), 420, 60); fadeIn($("ov-actions"), 420, 120);
+      document.querySelectorAll("#ov-charts .ov-chart").forEach((card, i) => { if (!card.contains(chartEl)) fadeIn(card, 420, 140 + i * 50); });
+    }
+    $("chat-log").scrollTop = $("chat-log").scrollHeight;
+    if (!immediate) $("ov-input").focus({ preventScroll: true });
+  }
+  $("ov-stage-back").addEventListener("click", () => { stopSpeaking(); closeFocus(); });
+  $("ov-stage-replay").addEventListener("click", () => focus.text && speak(focus.text));
+
+  // Glassmorphic list of orders (pending approvals / latest orders); a click focuses that order
+  function ordersListHtml(orders, element) {
+    if (!orders.length) return `<p class="py-16 text-center text-sm text-slate-400">${element === "pending_approvals" ? "Nothing is waiting for your approval. 🎉" : "No orders yet."}</p>`;
+    return `<ul class="grid gap-3 xl:grid-cols-2">${orders.map((o, i) => {
+      const d = o.decision || {}, total = d.totals?.net_total;
+      const contents = (o.lines || []).map((l) => `${num(l.quantity)} ${l.salesUnit} ${l.name}`).join(", ");
+      const el = o.status === "PENDING_APPROVAL" ? "pending_approvals" : "recent_orders";
+      return `<li class="ov-item" style="animation-delay:${i * 45}ms">
+        <button type="button" data-spot="${el}" data-spot-id="${esc(o.order_id)}" data-spot-text=""
+          class="h-full w-full rounded-2xl border border-white/10 bg-white/5 p-4 text-left backdrop-blur-lg transition hover:-translate-y-0.5 hover:border-indigo-400/40 hover:bg-white/10">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-2">${badge(o.status.replaceAll("_", " ").toLowerCase(), STATUS[o.status] || STATUS.EXPIRED)}
+                <span class="font-mono text-[11px] text-slate-500">${esc(o.order_id)}</span></div>
+              <p class="mt-2 line-clamp-2 text-sm text-slate-100">${esc(contents)}</p>
+              <p class="mt-1 text-xs text-slate-500"><span class="font-mono">${esc(o.agent_id)}</span> · ${esc(ago(o.created_at))}</p>
+            </div>
+            <p class="shrink-0 font-display text-xl font-semibold tabular-nums text-white">${total != null ? esc(eur(total)) : ""}</p>
+          </div>
+          ${d.explanation ? `<p class="mt-2 line-clamp-2 text-xs leading-relaxed text-slate-400">${esc(d.explanation)}</p>` : ""}
+        </button></li>`;
+    }).join("")}</ul>`;
+  }
+
+  // ------------------------------------------------------------------ text-to-speech
+  const voice = { on: store.get("va_voice", true) !== "off", listening: false, kind: null, rec: null, timer: null,
+                  spokenWords: new Set(), echoUntil: 0 };
+  const ttsSupported = "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+  const speechLang = () => (navigator.language || "en-US");
+  function pickVoice() {
+    const voices = ttsSupported ? speechSynthesis.getVoices() : [];
+    const lang = speechLang().toLowerCase(), base = lang.split("-")[0];
+    const score = (v) => (v.lang.toLowerCase() === lang ? 4 : v.lang.toLowerCase().startsWith(base) ? 2 : 0)
+      + (/natural|neural|google|aria|jenny|samantha/i.test(v.name) ? 1 : 0);
+    return voices.filter((v) => score(v) >= 2).sort((a, b) => score(b) - score(a))[0] || null;
+  }
+  function toSpeech(md) {
+    return String(md)
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/`([^`]*)`/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")            // links -> text
+      .replace(/^\s{0,3}(#{1,6}|[-*+]|\d+\.)\s+/gm, "")     // headings, bullets, numbered lists
+      .replace(/[*_~#>|]/g, "")
+      .replace(/€\s?(\d[\d,.]*)/g, "$1 euros")
+      .replace(/\bord_[0-9a-f]{6,}\b/g, "this order")       // don't spell out hex ids
+      .replace(/\s+/g, " ").trim();
+  }
+  function speak(text) {
+    if (!voice.on || !ttsSupported || !text) return;
+    speechSynthesis.cancel();
+    // Chrome stops long utterances after ~15 s: queue sentence-sized chunks instead
+    const chunks = toSpeech(text).match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
+    const v = pickVoice();
+    // Hands-free mode: the mic is paused while this plays; the words are kept to filter the echo tail
+    voice.spokenWords = new Set(normWords(toSpeech(text)));
+    voice.echoUntil = Date.now() + 60000;
+    const parts = chunks.map((c) => c.trim()).filter(Boolean);
+    parts.forEach((c, i) => {
+      const u = new SpeechSynthesisUtterance(c);
+      u.lang = v?.lang || speechLang();
+      if (v) u.voice = v;
+      u.rate = 1.03;
+      if (i === parts.length - 1) u.onend = u.onerror = () => { voice.echoUntil = Date.now() + 800; };  // room echo tail
+      speechSynthesis.speak(u);
+    });
+  }
+  const normWords = (t) => String(t).toLowerCase().normalize("NFC").replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((w) => w.length > 1);
+  function stopSpeaking() { if (ttsSupported) speechSynthesis.cancel(); voice.echoUntil = 0; }
+  if (ttsSupported) speechSynthesis.onvoiceschanged = () => {};   // voice list loads asynchronously in Chrome
+  function syncVoiceToggle() {
+    if (!ttsSupported) {                          // no speech synthesis: say so instead of failing silently
+      voice.on = false;
+      $("voice-toggle").disabled = true;
+      $("voice-toggle").title = "This browser can't read answers aloud";
+    }
+    $("voice-toggle").setAttribute("aria-checked", String(voice.on));
+    $("voice-icon").textContent = voice.on ? "🔊" : "🔇";
+    $("voice-label").textContent = voice.on ? "Voice on" : "Voice off";
+    if (ttsSupported) $("voice-toggle").title = voice.on ? "Voice replies on: click to mute" : "Voice replies muted: click to unmute";
+    $("voice-toggle").classList.toggle("opacity-50", !voice.on);
+  }
+  $("voice-toggle").addEventListener("click", () => {
+    voice.on = !voice.on;
+    store.set("va_voice", voice.on ? "on" : "off", true);
+    if (!voice.on) stopSpeaking();
+    syncVoiceToggle();
+  });
+
+  // ------------------------------------------------------------------ speech-to-text
+  // 1) Web Speech API (Chrome/Edge): transcribed in the browser -> /v1/chat/explain
+  // 2) Fallback (Firefox, Safari without SR): record audio -> /v1/chat/voice (Gemini transcribes + answers)
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const canRecord = !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+  const LISTENING = "🎙️ Listening… tap the mic to stop";
+  function setListening(on, label = LISTENING) {
+    voice.listening = on;
+    document.querySelectorAll(".mic-btn").forEach((b) => {
+      b.classList.toggle("mic-live", on); b.setAttribute("aria-pressed", String(on));
+      b.title = on ? "Listening: tap to stop" : "Speak (hands-free)";
+    });
+    document.querySelectorAll("[data-listen-pill]").forEach((el) => { el.classList.toggle("hidden", !on); el.classList.toggle("flex", on); });
+    setListenLabel(label);
+    if (!on) clearTimeout(voice.timer);
+  }
+  const setListenLabel = (t) => document.querySelectorAll("[data-listen-text]").forEach((el) => (el.textContent = t));
+  function micError(code) {
+    const blocked = code === "not-allowed" || code === "service-not-allowed";
+    const msg = {
+      "not-allowed": "Microphone access is blocked.",
+      "service-not-allowed": "Microphone access is blocked.",
+      "insecure": "The microphone only works on https:// or localhost.",
+      "no-speech": "I didn't hear anything. Tap the mic and try again.",
+      "audio-capture": "No microphone was found. Check that one is connected.",
+      "unsupported": "Voice input isn't supported in this browser. Type your question instead.",
+    }[code] || `Voice input failed (${code}).`;
+    toast(msg, "err");
+    if (code === "no-speech") return;            // transient: a toast is enough
+    // Permission problems also get an in-chat explanation with the fix
+    const help = blocked
+      ? "Click the 🔒 / camera icon in the address bar, set <b>Microphone</b> to <b>Allow</b>, then tap the mic again."
+      : code === "insecure" ? "Open the dashboard via <b>https://</b> (or <b>http://localhost</b>) to use voice."
+      : code === "unsupported" ? "Chrome or Edge give the best voice experience."
+      : "You can always type your question instead.";
+    chatBubble("bot").innerHTML = `<span class="text-rose-300">🎤 ${esc(msg)}</span> <span class="text-slate-300">${help}</span>`;
+  }
+
+  function toggleListening() {
+    if (voice.listening) { stopListening(); return; }
+    stopSpeaking();
+    if (!chat.open && !ov.open) toggleChat(true);
+    if (!window.isSecureContext) { micError("insecure"); return; }   // browsers refuse the mic on plain http
+    if (SR) startHandsFree();
+    else if (canRecord) { if (!chat.busy) startRecording(); }          // Firefox/Safari: tap-to-talk recording
+    else micError("unsupported");
+  }
+  function stopListening({ discard = false } = {}) {
+    if (hf.on) stopHandsFree({ discard });
+    else if (voice.kind === "rec" && voice.rec?.state === "recording") voice.rec.stop();
+  }
+
+  // ---- Continuous hands-free mode (Web Speech API), strictly turn-taking ------------------------
+  // One tap switches hands-free mode on; it stays on until the mic is tapped again. But the recogniser
+  // only runs while it's the MANAGER's turn: it is fully stopped the moment a question is sent, stays
+  // stopped while the assistant thinks and speaks, and restarts only after speech has completely
+  // finished (+ a short tail for room echo). So the assistant can never hear itself, and nothing it
+  // says can come back as a new prompt. A watchdog (not Chrome's unreliable onend) decides when to resume.
+  const HF_SEND_AFTER_MS = 1300;       // silence after a finished phrase = the question is complete
+  const HF_RESUME_AFTER_MS = 700;      // after the assistant goes quiet: let the room echo die down
+  const hf = { on: false, paused: false, rec: null, buffer: "", interim: "", shown: "", sendTimer: null,
+               restartTimer: null, fails: 0, quietSince: 0, lastSent: "", lastSentAt: 0 };
+
+  const aiBusyOrSpeaking = () => chat.busy || (ttsSupported && (speechSynthesis.speaking || speechSynthesis.pending));
+
+  function isEcho(heard) {             // safety net for the resume tail: the assistant's last words
+    if (!ttsSupported || Date.now() >= voice.echoUntil || !voice.spokenWords.size) return false;
+    const words = normWords(heard);
+    if (!words.length) return true;
+    return words.filter((w) => voice.spokenWords.has(w)).length / words.length >= 0.6;
+  }
+  function startHandsFree() {
+    Object.assign(hf, { on: true, paused: false, buffer: "", interim: "", shown: "", fails: 0, quietSince: 0 });
+    setListening(true);
+    if (aiBusyOrSpeaking()) hfPause(); else hfSession();
+  }
+  // Stop the recogniser NOW (abort discards anything it is still processing) and wait for our turn.
+  function hfPause() {
+    if (!hf.on) return;
+    clearTimeout(hf.sendTimer); clearTimeout(hf.restartTimer);
+    const rec = hf.rec;
+    hf.rec = voice.rec = null;           // set first: its onresult/onend are ignored from here on
+    try { rec?.abort(); } catch (e) { /* already stopped */ }
+    if (activeInput().value === hf.shown) activeInput().value = "";   // drop a half-heard transcript, not typed text
+    hf.buffer = hf.interim = hf.shown = "";
+    hf.paused = true;
+    hf.quietSince = 0;
+    setMicPaused(true);
+  }
+  function hfResume() {
+    if (!hf.on || !hf.paused) return;
+    hf.paused = false;
+    hf.fails = 0;
+    setMicPaused(false);
+    hfSession();
+  }
+  // Watchdog: pause the moment the assistant is busy or speaking; resume once it has been quiet a moment
+  setInterval(() => {
+    if (!hf.on) return;
+    if (aiBusyOrSpeaking()) { hf.quietSince = 0; if (!hf.paused) hfPause(); return; }
+    if (!hf.paused) return;
+    if (!hf.quietSince) hf.quietSince = Date.now();
+    if (Date.now() - hf.quietSince >= HF_RESUME_AFTER_MS) hfResume();
+  }, 250);
+
+  function hfSession() {
+    if (!hf.on || hf.paused || hf.rec) return;
+    const rec = new SR();
+    rec.lang = speechLang();
+    rec.continuous = true;             // keep listening through pauses
+    rec.interimResults = true;         // live transcript in the input box
+    rec.maxAlternatives = 1;
+    rec.onresult = (ev) => {
+      if (hf.rec !== rec || hf.paused) return;             // a stopped session can't deliver late results
+      let finals = "", interim = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const t = ev.results[i][0].transcript;
+        if (ev.results[i].isFinal) finals += t; else interim += t;
+      }
+      const heard = `${finals} ${interim}`.trim();
+      if (!heard || isEcho(heard)) return;                 // silence, or the tail of the assistant's voice
+      hf.fails = 0;
+      if (finals.trim()) hf.buffer = `${hf.buffer} ${finals}`.trim();
+      hf.interim = interim.trim();
+      hf.shown = `${hf.buffer} ${hf.interim}`.trim();
+      activeInput().value = hf.shown;
+      setListenLabel("🎙️ Hearing you…");
+      clearTimeout(hf.sendTimer);
+      hf.sendTimer = setTimeout(hfFlush, HF_SEND_AFTER_MS);
+    };
+    rec.onerror = (ev) => {
+      if (hf.rec !== rec) return;
+      if (ev.error === "no-speech" || ev.error === "aborted") return;     // just silence: onend restarts
+      if (["not-allowed", "service-not-allowed", "audio-capture"].includes(ev.error)) {
+        stopHandsFree({ discard: true }); micError(ev.error); return;
+      }
+      if (++hf.fails >= 3) { stopHandsFree({ discard: true }); micError(ev.error); }   // e.g. "network", 3 times
+    };
+    rec.onend = () => {                                    // Chrome ends sessions on its own (silence, ~60 s)
+      if (hf.rec !== rec) return;                          // we stopped it ourselves (pause / off)
+      hf.rec = voice.rec = null;
+      if (hf.on && !hf.paused) hf.restartTimer = setTimeout(hfSession, hf.fails ? 900 : 120);
+    };
+    hf.rec = voice.rec = rec;
+    voice.kind = "sr";
+    try { rec.start(); }
+    catch (e) {
+      hf.rec = voice.rec = null;
+      if (++hf.fails >= 3) { stopHandsFree({ discard: true }); micError(e.name || "start-failed"); }
+      else hf.restartTimer = setTimeout(hfSession, 600);
+    }
+  }
+  // Send the finished question, exactly once. Mid-phrase (only interim words): wait for it to be finalised.
+  function hfFlush() {
+    if (!hf.on || hf.paused) return;
+    if (!hf.buffer) { if (hf.interim) hf.sendTimer = setTimeout(hfFlush, 500); return; }
+    const text = hf.buffer;
+    const key = text.toLowerCase().replace(/\s+/g, " ").trim();
+    if (key === hf.lastSent && Date.now() - hf.lastSentAt < 5000) {   // the recogniser repeated itself
+      hf.buffer = hf.interim = ""; activeInput().value = ""; return;
+    }
+    hf.lastSent = key; hf.lastSentAt = Date.now();
+    hfPause();                           // our turn is over: the mic is OFF before the question leaves
+    ask(text, "voice");
+  }
+  function stopHandsFree({ discard = false } = {}) {
+    const text = hf.paused ? "" : `${hf.buffer} ${hf.interim}`.trim();
+    hf.on = false; hf.paused = false;
+    clearTimeout(hf.sendTimer); clearTimeout(hf.restartTimer);
+    const rec = hf.rec;
+    hf.rec = voice.rec = null; voice.kind = null;
+    try { rec?.abort(); } catch (e) { /* already stopped */ }
+    hf.buffer = hf.interim = hf.shown = "";
+    setMicPaused(false);
+    setListening(false);
+    activeInput().value = "";
+    if (!text || discard) return;
+    if (chat.busy) activeInput().value = text;           // keep it: one tap on Send/Ask
+    else ask(text, "voice");                             // tapped off right after speaking: still send it
+  }
+  // Paused look: amber, no pulse, "waiting for my answer" (the mic is genuinely off)
+  function setMicPaused(paused) {
+    document.querySelectorAll(".mic-btn").forEach((b) => {
+      b.classList.toggle("mic-paused", paused && hf.on);
+      if (hf.on) b.title = paused ? "Paused while the assistant answers: tap to turn hands-free off" : "Listening: tap to stop";
+    });
+    document.querySelectorAll("[data-listen-pill]").forEach((el) => el.classList.toggle("listen-paused", paused && hf.on));
+    if (hf.on) setListenLabel(paused ? "⏸ Paused while I answer… I'll listen again when I'm done" : LISTENING);
+  }
+
+  async function startRecording() {
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (e) { micError(e.name === "NotAllowedError" ? "not-allowed" : "audio-capture"); return; }
+    const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"]
+      .find((t) => MediaRecorder.isTypeSupported(t)) || "";
+    const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const chunks = [];
+    rec.ondataavailable = (ev) => { if (ev.data.size) chunks.push(ev.data); };
+    rec.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      setListening(false);
+      voice.kind = voice.rec = null;
+      const blob = new Blob(chunks, { type: (rec.mimeType || mimeType || "audio/webm").split(";")[0] });
+      if (blob.size > 1000) sendVoice(blob); else micError("no-speech");
+    };
+    voice.kind = "rec"; voice.rec = rec;
+    rec.start();
+    setListening(true, "Recording… tap the mic to send (max 15 s)");
+    voice.timer = setTimeout(() => rec.state === "recording" && rec.stop(), 15000);
+  }
+
+  async function sendVoice(blob) {
+    if (chat.busy) return;
+    setBusy(true);
+    const userEl = chatBubble("user");
+    userEl.textContent = "🎤 …";
+    const out = chatBubble("bot");
+    out.innerHTML = thinking("Transcribing and auditing…");
+    try {
+      const fd = new FormData();
+      fd.append("audio", blob, `question.${blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm"}`);
+      const res = await fetch("/v1/chat/voice", { method: "POST", headers: { Authorization: `Bearer ${S.token}` }, body: fd });
+      if (res.status === 401) { logout("Your session expired. Please sign in again."); return; }
+      if (!res.ok) { let b = null; try { b = await res.json(); } catch {} throw new ApiError(res.status, b); }
+      const r = await res.json();
+      userEl.textContent = "🎤 " + (r.transcript || "(couldn't make out the question)");
+      renderAnswer(out, r);
+      handleActions(out, r.actions);
+      if (r.type === "ui_action") openSpotlight(r.element, r.id, r.text);
+      speak(r.type === "ui_action" ? (r.text || r.answer) : r.answer);
+    } catch (e) { chatError(out, e); }
+    finally { setBusy(false); }
+  }
+
+  $("mic-inline").addEventListener("click", toggleListening);
+  $("chat-fab").addEventListener("click", () => toggleChat());
+  $("chat-close").addEventListener("click", () => { toggleChat(false); stopListening(); stopSpeaking(); });
+  $("chat-form").addEventListener("submit", (e) => { e.preventDefault(); const v = $("chat-input").value; $("chat-input").value = ""; ask(v); });
+  document.querySelectorAll("[data-quick]").forEach((b) => b.addEventListener("click", () => ask(b.dataset.quick)));
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    stopSpeaking();
+    if (chat.open && $("drawer").classList.contains("hidden")) toggleChat(false);
+  });
+  syncVoiceToggle();
+  if (!SR && !canRecord) document.querySelectorAll(".mic-btn").forEach((b) => (b.title = "Voice input isn't supported in this browser"));
+
+  // ======================================================================== expanded charts + AI analytics
+  const expanded = { chart: null, seq: 0 };
+  const LEVEL_COLORS = ["#f59e0b", "#38bdf8", "#22c55e", "#a855f7"];
+  const fact = (html) => `<li class="flex gap-2"><span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400"></span><span>${html}</span></li>`;
+  const pct = (a, b) => (b ? Math.round(((a - b) / b) * 100) : null);
+
+  function chartShell(kind) {
+    const wrap = document.createElement("div");
+    wrap.className = "grid h-full min-h-0 gap-5 lg:grid-cols-3";
+    wrap.innerHTML = `
+      <div class="relative min-h-[300px] rounded-xl border border-white/10 bg-white/[0.03] p-3 lg:col-span-2">
+        <canvas aria-label="${kind === "spend" ? "Placed spend per day" : "Agent trust levels"} (expanded)"></canvas>
+      </div>
+      <aside class="scrollbar flex min-h-0 flex-col gap-4 overflow-auto pr-1">
+        <section>
+          <h4 class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Key facts</h4>
+          <ul data-facts class="mt-2 space-y-2 text-sm leading-snug text-slate-200"></ul>
+        </section>
+        <section class="rounded-xl border border-violet-400/30 bg-violet-500/[0.06] p-3">
+          <div class="flex items-center justify-between">
+            <h4 class="text-[11px] font-semibold uppercase tracking-wider text-violet-300">✨ AI analytics</h4>
+            <button data-ai-retry class="hidden rounded px-2 py-0.5 text-[11px] text-violet-200 hover:bg-white/10">Retry</button>
+          </div>
+          <div data-ai class="chat-md mt-2 text-sm leading-relaxed text-slate-200"></div>
+          <p class="mt-2 text-[10px] text-slate-500">Written by Gemini from the live dashboard data. Facts on the left are computed exactly.</p>
+        </section>
+      </aside>`;
+    return wrap;
+  }
+
+  function spendView(m, canvas, facts) {
+    const days = m.daily_spend || [];
+    const labels = days.map((d) => d.day.slice(5));
+    const spend = days.map((d) => d.spend);
+    // dashed line: average of all EARLIER days, so each bar can be compared with "usual"
+    const avgBefore = spend.map((_, i) => (i ? +(spend.slice(0, i).reduce((a, b) => a + b, 0) / i).toFixed(2) : null));
+    const chart = new Chart(canvas, {
+      data: { labels, datasets: [
+        { type: "bar", label: "Placed spend", data: spend, backgroundColor: "#0ea5e9", borderRadius: 8, maxBarThickness: 64, order: 2 },
+        { type: "line", label: "Average of earlier days", data: avgBefore, borderColor: "#a855f7", borderDash: [6, 5],
+          pointRadius: 3, tension: 0.3, spanGaps: true, order: 1 },
+      ] },
+      options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+        plugins: { legend: { labels: { font: { size: 13 } } },
+                   tooltip: { callbacks: { label: (c) => ` ${c.dataset.label}: ${eur(c.raw)}`,
+                                           afterBody: (items) => { const d = days[items[0].dataIndex]; return d ? `${d.orders} order(s)` : ""; } } } },
+        scales: { y: { ticks: { callback: (v) => `€${v}`, font: { size: 12 } }, grid: { color: "rgba(255,255,255,.06)" } },
+                  x: { ticks: { font: { size: 12 } }, grid: { display: false } } } },
+    });
+    // ---- computed facts (exact) ----
+    const total = spend.reduce((a, b) => a + b, 0), orders = days.reduce((a, d) => a + d.orders, 0);
+    const out = [];
+    if (!days.length) out.push(fact("No placed orders yet, so there is no spend to chart."));
+    else {
+      out.push(fact(`<b>${esc(eur(total))}</b> placed across <b>${days.length}</b> day(s) in <b>${orders}</b> order(s).`));
+      const top = days.reduce((a, d) => (d.spend > a.spend ? d : a), days[0]);
+      out.push(fact(`Busiest day: <b>${esc(top.day)}</b> with <b>${esc(eur(top.spend))}</b> (${top.orders} orders).`));
+      if (days.length >= 2) {
+        const last = spend[spend.length - 1], base = avgBefore[avgBefore.length - 1], ch = pct(last, base);
+        out.push(fact(`Latest day ${esc(eur(last))} is <b class="${ch > 0 ? "text-orange-300" : "text-green-300"}">${ch > 0 ? "+" : ""}${ch}%</b> vs the earlier-day average (${esc(eur(base))}).`));
+      } else out.push(fact("Only one day of history so far; trends appear from the second day."));
+    }
+    const by = Object.fromEntries((m.placed_by_decider || []).map((r) => [r.decided_by, r]));
+    const autoN = (by.auto?.n || 0) + (by.trusted_rule?.n || 0), humanN = by.human?.n || 0;
+    const autoV = (by.auto?.value || 0) + (by.trusted_rule?.value || 0), humanV = by.human?.value || 0;
+    if (autoN + humanN) out.push(fact(`<b>${Math.round((autoN / (autoN + humanN)) * 100)}%</b> of placed orders needed no human
+      (${autoN} orders, ${esc(eur(autoV))}); managers approved ${humanN} (${esc(eur(humanV))}).`));
+    if (m.pending_approvals) out.push(fact(`<b>${m.pending_approvals}</b> order(s) are waiting for approval and are not in this spend yet.`));
+    facts.innerHTML = out.join("");
+    return chart;
+  }
+
+  function trustView(m, canvas, facts) {
+    const agents = m.agents || [];
+    const chart = new Chart(canvas, {
+      type: "bar",
+      data: { labels: agents.map((a) => a.agent_id), datasets: [
+        { label: "Current score", data: agents.map((a) => Math.max(0, a.score)),
+          backgroundColor: agents.map((a) => LEVEL_COLORS[(a.level - 1) % LEVEL_COLORS.length]), borderRadius: 6, stack: "s" },
+        { label: "Approvals to next level", data: agents.map((a) => a.next_level?.approvals_needed || 0),
+          backgroundColor: "rgba(255,255,255,.12)", borderRadius: 6, stack: "s" },
+      ] },
+      options: { indexAxis: "y", maintainAspectRatio: false,
+        plugins: { legend: { labels: { font: { size: 13 } } },
+          tooltip: { callbacks: { afterBody: (items) => {
+            const a = agents[items[0].dataIndex];
+            return [`Level ${a.level} '${a.name}' · limit ${eur(a.autonomous_limit)}`,
+                    a.next_level ? `Next: L${a.next_level.level} '${a.next_level.name}' (${eur(a.next_level.max_autonomous_spend)})` : "Top level reached"];
+          } } } },
+        scales: { x: { stacked: true, title: { display: true, text: "Trust score (approvals − 2 × rejections)" },
+                       grid: { color: "rgba(255,255,255,.06)" }, ticks: { precision: 0 } },
+                  y: { stacked: true, ticks: { font: { family: "JetBrains Mono", size: 12 } }, grid: { display: false } } } },
+    });
+    facts.innerHTML = agents.map((a) => fact(
+      `<span class="font-mono text-xs text-white">${esc(a.agent_id)}</span>: level <b>${a.level} ${esc(a.name)}</b>,
+       autonomous limit <b>${esc(eur(a.autonomous_limit))}</b>; ${a.approvals} approval(s), ${a.rejections} rejection(s),
+       ${a.autonomous_orders} order(s) placed without a human. ` +
+      (a.next_level ? `<b>${a.next_level.approvals_needed}</b> more approval(s) unlock L${a.next_level.level} (${esc(eur(a.next_level.max_autonomous_spend))}).`
+                    : `<span class="text-green-300">Top level.</span>`)
+    )).join("") + fact("Each rejection costs 2 points, so one bad order undoes two good approvals.");
+    return chart;
+  }
+
+  const AI_QUESTIONS = {
+    spend: "Give exactly 3 concise bullet points of analytics for the 'Placed spend per day' chart, using " +
+           "metrics.placed_spend_per_day_eur and the rest of the dashboard data: (1) the trend, comparing the latest day " +
+           "with earlier days as a percentage; (2) what is driving the spend (agents, products, autonomous vs human approvals); " +
+           "(3) one practical recommendation. Only use numbers that are in the data.",
+    trust: "Give exactly 3 concise bullet points analysing agent_trust_levels: where each agent stands and its spend limit, " +
+           "what unlocks the next level, and one risk or recommendation. Only use numbers that are in the data.",
+  };
+  async function loadAiAnalytics(kind, box, retryBtn, seq) {
+    retryBtn.classList.add("hidden");
+    box.innerHTML = thinking("Analysing the chart…");
+    try {
+      // allow_actions:false => analytics can never trigger approve/reject tools
+      const r = await api("/v1/chat/explain", { method: "POST", body: { question: AI_QUESTIONS[kind], mode: "text", allow_actions: false } });
+      if (seq !== expanded.seq || !modal.open) return;           // modal closed or replaced meanwhile
+      box.innerHTML = window.marked && window.DOMPurify ? DOMPurify.sanitize(marked.parse(r.answer)) : esc(r.answer);
+    } catch (e) {
+      if (seq !== expanded.seq || !modal.open) return;
+      const why = e.status === 429 ? "Too many AI requests in a minute." : e.status === 503 ? "The AI isn't configured on the server."
+        : "Gemini is busy right now.";
+      box.innerHTML = `<p class="text-slate-400">${esc(why)} The key facts beside the chart are still exact.</p>`;
+      retryBtn.classList.remove("hidden");
+    }
+  }
+
+  function expandChart(kind) {
+    if (ov.open) { closeOverlay({ then: () => expandChart(kind) }); return; }
+    const m = S.lastMetrics;
+    if (!m) { toast("Metrics are still loading. Try again in a moment.", "warn"); return; }
+    if (typeof Chart === "undefined") { toast("The chart library couldn't load (offline?).", "err"); return; }
+    const seq = ++expanded.seq;
+    const wrap = chartShell(kind);
+    openModal({
+      kicker: "Analytics",
+      title: kind === "spend" ? "Placed spend per day" : "Agent trust levels",
+      body: wrap,
+      width: window.innerWidth < 768 ? "96vw" : "80vw",
+      height: window.innerWidth < 768 ? "90vh" : "80vh",
+      onClose: () => { expanded.chart?.destroy(); expanded.chart = null; },
+    });
+    const canvas = wrap.querySelector("canvas"), facts = wrap.querySelector("[data-facts]");
+    const box = wrap.querySelector("[data-ai]"), retry = wrap.querySelector("[data-ai-retry]");
+    // Build the chart after the modal has its size, so Chart.js measures the large canvas correctly
+    requestAnimationFrame(() => {
+      if (seq !== expanded.seq) return;
+      try {
+        expanded.chart?.destroy();
+        expanded.chart = kind === "spend" ? spendView(m, canvas, facts) : trustView(m, canvas, facts);
+      } catch (e) {
+        console.warn("expanded chart failed:", e);
+        canvas.parentElement.innerHTML = `<p class="p-6 text-sm text-red-300">The chart couldn't be drawn: ${esc(e.message)}</p>`;
+      }
+    });
+    retry.addEventListener("click", () => loadAiAnalytics(kind, box, retry, seq));
+    loadAiAnalytics(kind, box, retry, seq);
+  }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-expand]");
+    if (b) expandChart(b.dataset.expand);
+  });
+
+  // ======================================================================== Spatial AI: spotlight
+  // Gemini calls focus_ui_element(...) -> /v1/chat/explain returns {type:"ui_action", element, id, text}
+  // -> the dashboard blurs, the spotlight pops up beside the chat, renders that element and speaks the text.
+  const spot = { open: false, element: null, id: null, text: "", seq: 0, chart: null };
+  const SPOT_TITLES = { offer: "Proactive offer from Valio Aimo", pending_approvals: "Order awaiting your approval", recent_orders: "Order details",
+                        spend_chart: "Placed spend per day", trust_levels: "Agent trust levels", audit_trail: "Latest audit events",
+                        order_decisions: "Order decisions" };
+
+  function positionSpotlight() {
+    const el = $("spotlight");
+    if (window.innerWidth < 1024) { el.style.right = el.style.width = ""; return; }   // mobile: CSS insets
+    const chatOpen = chat.open && !$("chat").classList.contains("hidden");
+    const right = chatOpen ? Math.round($("chat").getBoundingClientRect().width) + 40 : 104;  // next to the chat / its button
+    el.style.right = `${right}px`;
+    el.style.width = `${Math.min(780, window.innerWidth - right - 32)}px`;
+  }
+
+  async function openSpotlight(element, id, text) {
+    // Full-screen assistant open: charts, lists and orders come to its centre stage (Focus Mode).
+    // Offers keep their interactive spotlight on the dashboard.
+    if (ov.open && element !== "offer") return openFocus(element, id, text);
+    if (ov.open) await afterOverlay();
+    const seq = ++spot.seq;
+    Object.assign(spot, { element, id: id || null, text: text || "" });
+    spot.chart?.destroy(); spot.chart = null;
+    const el = $("spotlight");
+    $("spot-title").textContent = SPOT_TITLES[element] || "Dashboard";
+    $("spot-text").textContent = text || "";
+    $("spot-text").parentElement.classList.toggle("hidden", !text);
+    $("spot-body").innerHTML = thinking("Bringing it up…");
+    positionSpotlight();
+    // 1. blur the dashboard  2. pop the spotlight in (commit the hidden state first so the transition runs)
+    $("app").classList.add("dashboard-blur");
+    $("spot-catcher").classList.remove("hidden");
+    if (!spot.open) {
+      el.classList.remove("hidden"); el.classList.add("flex");
+      void el.offsetWidth;
+      el.classList.remove("opacity-0", "scale-95"); el.classList.add("opacity-100", "scale-100");
+    }
+    spot.open = true;
+    $("spot-close").focus({ preventScroll: true });
+    try { await renderSpot(element, spot.id, seq); }
+    catch (e) {
+      if (seq === spot.seq) $("spot-body").innerHTML = `<p class="text-sm text-red-300">Couldn't load this view: ${esc(e.message)}</p>`;
+    }
+  }
+
+  function closeSpotlight() {
+    if (!spot.open) return;
+    spot.open = false;
+    const seq = ++spot.seq;                      // late async renders for the old view are ignored
+    const el = $("spotlight");
+    el.classList.remove("opacity-100", "scale-100"); el.classList.add("opacity-0", "scale-95");
+    $("app").classList.remove("dashboard-blur");
+    $("spot-catcher").classList.add("hidden");
+    stopSpeaking();
+    setTimeout(() => {
+      if (spot.open || seq !== spot.seq) return;
+      el.classList.add("hidden"); el.classList.remove("flex");
+      spot.chart?.destroy(); spot.chart = null;
+      $("spot-body").innerHTML = "";
+    }, 320);
+  }
+
+  async function renderSpot(element, id, seq, body = $("spot-body"), titleEl = $("spot-title"), stale = () => seq !== spot.seq) {
+    if ((element === "pending_approvals" || element === "recent_orders") && !id) {     // the whole list
+      const r = element === "pending_approvals" ? await api("/v1/approvals") : await api("/v1/dashboard/orders?limit=8");
+      if (stale()) return;
+      titleEl.textContent = element === "pending_approvals" ? `Orders awaiting your approval (${r.orders.length})` : "Latest orders";
+      body.innerHTML = ordersListHtml(r.orders, element);
+      return;
+    }
+    if (element === "pending_approvals" || element === "recent_orders") {
+      const o = await api(`/v1/dashboard/orders/${encodeURIComponent(id)}`);
+      if (stale()) return;
+      titleEl.textContent = o.status === "PENDING_APPROVAL" ? SPOT_TITLES.pending_approvals : SPOT_TITLES.recent_orders;
+      body.innerHTML = spotOrderHtml(o);
+      return;
+    }
+    if (element === "spend_chart" || element === "trust_levels") {
+      const m = S.lastMetrics || await api("/v1/metrics");
+      if (stale()) return;
+      body.innerHTML = `<div class="grid gap-4 md:grid-cols-5">
+          <div class="relative h-[320px] rounded-xl border border-white/10 bg-white/[0.03] p-3 md:col-span-3"><canvas></canvas></div>
+          <ul data-facts class="space-y-2 text-sm leading-snug text-slate-200 md:col-span-2"></ul></div>`;
+      const canvas = body.querySelector("canvas"), facts = body.querySelector("[data-facts]");
+      await new Promise((r) => requestAnimationFrame(r));        // let the spotlight size itself first
+      if (stale()) return;
+      spot.chart = element === "spend_chart" ? spendView(m, canvas, facts) : trustView(m, canvas, facts);
+      return;
+    }
+    if (element === "order_decisions") {                       // dashboard spotlight (outside the overlay)
+      const b = S.deciders || [];
+      body.innerHTML = `<div class="grid gap-4 md:grid-cols-5">
+          <div class="relative h-[320px] rounded-xl border border-white/10 bg-white/[0.03] p-3 md:col-span-3"><canvas></canvas></div>
+          <ul data-facts class="space-y-2 text-sm leading-snug text-slate-200 md:col-span-2"></ul></div>`;
+      body.querySelector("[data-facts]").innerHTML = b.map((x) => fact(`<b>${esc(x.name)}</b>: ${esc(x.n)} order(s)${x.value != null ? ` · ${esc(eur(x.value))}` : ""}
+        <span class="text-slate-400">(${esc(x.detail)})</span>`)).join("");
+      await new Promise((r) => requestAnimationFrame(r));
+      if (stale()) return;
+      spot.chart = new Chart(body.querySelector("canvas"), { type: "doughnut",
+        data: { labels: b.map((x) => x.name), datasets: [{ data: b.map((x) => x.n), backgroundColor: ["#22c55e", "#a855f7", "#ef4444"],
+                borderColor: "#0f1420", borderWidth: 3 }] },
+        options: { cutout: "62%", maintainAspectRatio: false, plugins: { legend: { position: "bottom" } } } });
+      return;
+    }
+    if (element === "offer") {
+      const o = (S.offers || []).find((x) => x.offer_id === id);
+      if (!o) { body.innerHTML = `<p class="text-sm text-slate-400">This offer is no longer listed.</p>`; return; }
+      body.innerHTML = offerHtml(o);
+      if ((o.status || "OPEN") === "OPEN") await previewOffer(o, null, seq);
+      return;
+    }
+    if (element === "audit_trail") {
+      const r = await api("/v1/audit?limit=300");
+      if (stale()) return;
+      const rows = r.entries.filter(inFeed).filter((e) => !id || e.order_id === id).slice(0, 5);
+      body.innerHTML = `<p class="mb-2 text-xs text-slate-400">${id ? `Last ${rows.length} event(s) for <span class="font-mono">${esc(id)}</span>`
+                         : `Last ${rows.length} purchasing event(s)`} · hash-chained · click one to open its full trail</p>
+        <ol class="terminal divide-y overflow-hidden">${rows.map((e) => auditItem(e, false)).join("")
+          || `<li class="px-4 py-6 text-center text-sm text-slate-500">No events yet.</li>`}</ol>`;
+      return;
+    }
+    body.innerHTML = `<p class="text-sm text-slate-400">Nothing to show for “${esc(element)}”.</p>`;
+  }
+
+  // ------------------------------------------------------------------ proactive offer: accept & negotiate
+  function offerHtml(o) {
+    const open = (o.status || "OPEN") === "OPEN", mgr = isManager();
+    const chip = (t, cls = "bg-white/5 text-slate-300 ring-white/10") => `<span class="rounded-full px-2 py-0.5 text-[11px] ring-1 ring-inset ${cls}">${esc(t)}</span>`;
+    return `
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0">
+          <p class="font-display text-xl font-semibold text-white">${esc(o.name)}</p>
+          <p class="mt-1 text-sm text-slate-400"><span class="font-mono">${esc(o.productId)}</span> · ${esc(num(o.quantity_available))} ${esc(o.salesUnit)} on offer
+             · valid until ${esc(o.valid_until)}${o.target_agent_id ? ` · for ${esc(o.target_agent_id)}` : ""}</p>
+          <p class="mt-1 text-sm text-slate-300">${esc(o.reason)}</p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            ${(o.claims || []).slice(0, 4).map((c) => chip(c.replaceAll("_", " ").toLowerCase(), "bg-green-500/10 text-green-300 ring-green-400/30")).join("")}
+            ${(o.allergens || []).length ? chip(`allergens: ${o.allergens.join(", ")}`, "bg-yellow-400/10 text-yellow-200 ring-yellow-400/30") : ""}
+            ${o.deliveryReliability != null ? chip(`reliability ${Math.round(o.deliveryReliability * 100)}%`) : ""}
+            ${o.carbonKgCo2ePerKg != null ? chip(`${o.carbonKgCo2ePerKg} kg CO₂e/kg`) : ""}
+          </div>
+        </div>
+        <div class="text-right"><p class="font-display text-4xl font-bold text-cyan-300">−${esc(o.discount_pct)}%</p>
+          ${o.base_price != null ? `<p class="mt-1 text-sm tabular-nums"><span class="text-slate-500 line-through">${esc(eur(o.base_price))}</span>
+             <span class="font-semibold text-white">${esc(eur(o.offer_price))}</span><span class="text-slate-500"> / ${esc(o.salesUnit)}</span></p>` : ""}
+          ${o.stock_status ? `<p class="text-[11px] text-cyan-200/80">${esc(o.stock_status)}${o.supplier ? ` · ${esc(o.supplier)}` : ""}</p>` : ""}
+          ${badge((o.status || "OPEN").toLowerCase(), STATUS[o.status || "OPEN"] || STATUS.OPEN)}</div>
+      </div>
+      ${open ? `
+      <div class="mt-5 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+        <div class="flex flex-wrap items-end justify-between gap-3">
+          <label class="text-xs text-slate-400">Base quantity (the agent asks Valio for +20% on top)
+            <input id="offer-qty" type="number" min="1" step="1" class="mt-1 block w-40 rounded-lg border border-white/15 bg-ink-950/60 px-3 py-2 text-sm text-white focus:border-sky-400 focus:outline-none">
+          </label>
+          <p class="text-[11px] text-slate-500">Valio's side is <b>simulated</b>: it accepts if the bigger volume fits the surplus.</p>
+        </div>
+        <div id="offer-terms" class="mt-4">${thinking("Working out the counter-offer…")}</div>
+      </div>
+      ${mgr ? `<button id="offer-accept" disabled
+          class="mt-4 w-full rounded-xl bg-gradient-to-r from-green-600 to-emerald-500 px-5 py-3 text-base font-semibold text-white shadow-lg shadow-green-900/40 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50">
+          🤝 Accept Offer &amp; Negotiate</button>`
+            : `<p class="mt-4 rounded-lg border border-yellow-400/30 bg-yellow-400/10 px-3 py-2 text-sm text-yellow-100">Auditor view: read-only. A manager can accept this offer.</p>`}`
+      : `<p class="mt-5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-300">This offer is ${esc((o.status || "").toLowerCase())}${o.accepted_by ? ` (accepted by ${esc(o.accepted_by)})` : ""}.</p>`}`;
+  }
+
+  const offerState = { timer: null, last: null };
+  async function previewOffer(o, qty, seq) {
+    const box = $("offer-terms"), btn = $("offer-accept");
+    if (!box) return;
+    if (btn) btn.disabled = true;
+    try {
+      const r = await api("/v1/agent/negotiate", { method: "POST", body: {
+        offer_id: o.offer_id, product_id: o.productId, base_price: o.base_price ?? undefined,
+        quantity: qty || undefined, dry_run: true } });
+      if (seq !== spot.seq) return;                                   // spotlight closed / replaced meanwhile
+      const t = r.terms, pv = r.preview;
+      offerState.last = { offer: o, qty: t.original_qty, terms: t };
+      const q = $("offer-qty"); if (q && !q.value) q.value = t.original_qty;
+      const row = (k, v, cls = "text-slate-100") => `<div class="flex justify-between gap-3 py-1"><dt class="text-slate-400">${k}</dt><dd class="text-right tabular-nums ${cls}">${v}</dd></div>`;
+      if (t.status !== "NEGOTIATION_WON") {
+        box.innerHTML = `<p class="rounded-lg border border-yellow-400/30 bg-yellow-400/10 px-3 py-2 text-sm text-yellow-100">⚠ ${esc(t.reason)}. Lower the quantity.</p>`;
+        return;
+      }
+      box.innerHTML = `<dl class="divide-y divide-white/5 text-sm">
+          ${row("List price", `${esc(eur(t.list_unit_price))} / ${esc(t.sales_unit)}`)}
+          ${row(`Offer price (−${esc(t.offer_discount_pct)}%)`, `${esc(eur(t.offer_unit_price))} / ${esc(t.sales_unit)}`)}
+          ${row("Agent's counter-offer", `${esc(num(t.new_qty))} ${esc(t.sales_unit)} (+20%) at −${esc(t.discount_pct)}% more → ${esc(eur(t.new_unit_price))}`, "text-white")}
+          ${row("New total", esc(eur(t.new_total)), "text-white font-semibold")}
+          ${row("Saved through negotiation", esc(eur(t.saved_amount)), "text-green-300 font-semibold")}
+          ${row("Saved vs list (offer + negotiation)", esc(eur(t.total_saved_vs_list)), "text-green-200")}
+        </dl>
+        ${pv ? `<p class="mt-3 rounded-lg border ${pv.status === "AUTO_APPROVED" ? "border-green-400/30 bg-green-500/10 text-green-100" : pv.status === "REJECTED" ? "border-red-400/30 bg-red-500/10 text-red-100" : "border-yellow-400/30 bg-yellow-400/10 text-yellow-100"} px-3 py-2 text-xs leading-relaxed">
+          <b>Guardrails preview: ${esc(pv.status.replaceAll("_", " ").toLowerCase())}.</b> ${esc(pv.explanation)}</p>` : ""}`;
+      if (btn) btn.disabled = pv?.status === "REJECTED";
+    } catch (e) {
+      if (seq !== spot.seq) return;
+      const msg = e.code === "OFFER_SIGNATURE_INVALID" ? `Can't negotiate: ${e.message}`
+        : e.status === 422 ? `The request was rejected: ${e.message}`
+        : e.status === 410 ? "This offer has expired."
+        : e.status === 409 ? `Can't negotiate: ${e.message}` : `Couldn't price the offer: ${e.message}`;
+      box.innerHTML = `<p class="text-sm text-red-300">${esc(msg)}</p>`;
+      console.warn("negotiate preview failed", e.status, e.code, e.fields, e.body);
+    }
+  }
+
+  async function acceptOffer() {
+    const st = offerState.last, btn = $("offer-accept");
+    if (!st || !btn || btn.disabled) return;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="inline-flex items-center gap-2">${sparkle("spark-pulse h-4 w-4")}Negotiating with Valio…</span>`;
+    try {
+      const r = await api("/v1/agent/negotiate", { method: "POST", body: {
+        offer_id: st.offer.offer_id, product_id: st.offer.productId, base_price: st.offer.base_price ?? undefined, quantity: st.qty } });
+      if (!r.ok) {
+        toast(`Valio declined the counter-offer: ${r.reason}`, "warn");
+        btn.disabled = false; btn.textContent = "🤝 Accept Offer & Negotiate";
+        return;
+      }
+      toast(`Offer Accepted and Negotiated! Saved €${r.saved_amount.toFixed(2)} (${r.order.status.replaceAll("_", " ").toLowerCase()}).`, "ok");
+      closeSpotlight();
+      refresh(["offers", "metrics", "approvals", "audit"]);
+    } catch (e) {
+      toast(e.status === 409 ? `Couldn't accept: ${e.message}` : `Negotiation failed: ${e.message}`, "err");
+      btn.disabled = false; btn.textContent = "🤝 Accept Offer & Negotiate";
+    }
+  }
+  document.addEventListener("click", (e) => { if (e.target.closest("#offer-accept")) acceptOffer(); });
+  document.addEventListener("input", (e) => {
+    if (e.target.id !== "offer-qty" || !offerState.last) return;
+    const qty = Math.max(1, Math.floor(Number(e.target.value) || 0));
+    clearTimeout(offerState.timer);
+    offerState.timer = setTimeout(() => previewOffer(offerState.last.offer, qty, spot.seq), 350);   // debounced re-pricing
+  });
+
+  function spotOrderHtml(o) {
+    const d = o.decision, pending = o.status === "PENDING_APPROVAL", mgr = isManager();
+    const drift = d.drift || [];
+    const appr = o.approval || {};
+    const lines = o.lines.map((l) => `<tr class="align-top">
+        <td class="py-2 pr-3"><p class="text-slate-100">${esc(l.name)}</p><p class="font-mono text-[11px] text-slate-500">${esc(l.productId)}
+          ${l.substitutesFor ? `<span class="ml-1 rounded bg-violet-500/15 px-1.5 py-0.5 font-sans text-[10px] text-violet-300">substitutes ${esc(l.substitutesFor)}</span>` : ""}</p></td>
+        <td class="py-2 pr-3 text-right tabular-nums">${esc(num(l.quantity))} <span class="text-slate-500">${esc(l.salesUnit)}</span></td>
+        <td class="py-2 text-right font-medium tabular-nums text-white">${esc(eur(l.lineValue))}</td></tr>`).join("");
+    const reasons = d.violations.filter((v) => v.severity !== "INFO").map((v) => `<li class="text-xs text-slate-300">
+        <span class="mr-1 rounded px-1.5 py-0.5 font-mono text-[10px] ${SEVERITY[v.severity]}">${esc(v.code)}</span>${esc(v.message)}</li>`).join("");
+    const actions = pending
+      ? (mgr ? `<div class="mt-5 space-y-3">
+            <textarea rows="2" data-comment="${esc(o.order_id)}" placeholder="Comment (required to reject), recorded in the audit trail"
+              class="w-full resize-y rounded-lg border border-white/15 bg-ink-950/60 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-sky-400 focus:outline-none">${esc(S.drafts[o.order_id] || "")}</textarea>
+            <div class="grid gap-2 sm:grid-cols-3">
+              <button data-decide="reject" data-id="${esc(o.order_id)}" class="rounded-xl border border-red-400/60 px-4 py-3 text-base font-semibold text-red-200 hover:bg-red-500/15 disabled:opacity-40">Reject</button>
+              <button data-decide="approve" data-id="${esc(o.order_id)}" class="rounded-xl bg-green-600 px-4 py-3 text-base font-semibold text-white shadow-lg shadow-green-900/40 hover:bg-green-500 disabled:opacity-40">Approve</button>
+              <button data-decide="approve" data-remember="1" data-id="${esc(o.order_id)}" ${o.rememberable ? "" : "disabled"}
+                title="${o.rememberable ? "Approve and auto-approve identical orders for 30 days" : "Can't be remembered: an escalation reason is never waivable"}"
+                class="rounded-xl bg-violet-600 px-4 py-3 text-base font-semibold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40">Approve &amp; Remember</button>
+            </div></div>`
+             : `<p class="mt-5 rounded-lg border border-yellow-400/30 bg-yellow-400/10 px-3 py-2 text-sm text-yellow-100">Auditor view: read-only. A manager can approve or reject this order.</p>`)
+      : `<div class="mt-5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200">
+           ${o.status === "PLACED" ? "Placed" : "Closed"} · decided by <b>${esc(o.decided_by || "policy")}</b>
+           ${appr.reviewer ? ` · ${esc(appr.decision === "reject" ? "rejected" : "approved")} by <b>${esc(appr.reviewer)}</b>${appr.via === "ai_secretary" ? " via the AI secretary" : ""}` : ""}
+           ${o.confirmation?.number ? ` · confirmation <span class="font-mono">${esc(o.confirmation.number)}</span>` : ""}
+           ${appr.comment ? `<p class="mt-1 text-xs text-slate-400">“${esc(appr.comment)}”</p>` : ""}</div>`;
+    return `
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0">
+          <div class="flex flex-wrap items-center gap-2">${badge(o.status.replaceAll("_", " ").toLowerCase(), STATUS[o.status] || STATUS.EXPIRED)}
+            ${drift.length ? `<span class="rounded-full bg-orange-500/20 px-2 py-0.5 text-[11px] font-semibold text-orange-200 ring-1 ring-inset ring-orange-400/60">⚠ DRIFT +${esc(Math.round(Math.max(...drift.map((x) => x.deviation_pct))))}%</span>` : ""}
+            <span class="font-mono text-xs text-slate-400">${esc(o.order_id)}</span></div>
+          <p class="mt-1.5 text-sm text-slate-300"><span class="font-mono text-white">${esc(o.agent_id)}</span> · delivery ${esc(o.requested_date)} · submitted ${esc(ago(o.created_at))}</p>
+        </div>
+        <div class="text-right"><p class="text-[11px] uppercase tracking-wider text-slate-500">Net total</p>
+          <p class="font-display text-3xl font-bold tabular-nums text-white">${esc(eur(d.totals.net_total))}</p>
+          <p class="text-xs text-slate-500">agent limit ${esc(eur(d.totals.autonomous_limit))}</p></div>
+      </div>
+      <p class="mt-4 rounded-lg border border-sky-400/25 bg-sky-500/[0.07] px-3 py-2 text-sm leading-relaxed text-sky-50">${esc(d.explanation)}</p>
+      <div class="mt-4 grid gap-4 md:grid-cols-5">
+        <div class="overflow-x-auto md:col-span-3"><table class="w-full text-sm"><tbody class="divide-y divide-white/10">${lines}</tbody></table></div>
+        <ul class="space-y-1.5 md:col-span-2">${reasons || `<li class="text-xs text-slate-400">No escalation reasons.</li>`}</ul>
+      </div>
+      ${actions}
+      <button data-audit="${esc(o.order_id)}" class="mt-4 text-xs text-sky-300 hover:text-sky-200">Open the full hash-chained audit trail →</button>`;
+  }
+
+  $("spot-close").addEventListener("click", closeSpotlight);
+  $("spot-catcher").addEventListener("click", closeSpotlight);
+  $("spot-replay").addEventListener("click", () => speak(spot.text));
+  window.addEventListener("resize", () => { if (spot.open) positionSpotlight(); });
+  // Capture phase: Esc closes the spotlight before the chat/drawer handlers (the confirm modal, if open, goes first)
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && spot.open && !modal.open && $("drawer").classList.contains("hidden")) {
+      e.stopImmediatePropagation(); e.preventDefault(); closeSpotlight();
+    }
+  }, true);
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-spot]");
+    if (b) openSpotlight(b.dataset.spot, b.dataset.spotId, b.dataset.spotText);
+  });
+
+  // ---- Waveform: bars are built once; they bounce while the mic listens or the assistant speaks
+  document.querySelectorAll("[data-wave]").forEach((w) => {
+    w.innerHTML = Array.from({ length: 28 }, (_, i) => {
+      const h = 6 + Math.round(18 * Math.abs(Math.sin(i * 0.9)) + (i % 3) * 3);   // varied peak heights
+      return `<span style="--h:${Math.min(h, 26)}px;--d:${(i * 0.045).toFixed(3)}s"></span>`;
+    }).join("");
+  });
+  setInterval(() => {
+    const active = (voice.listening && !hf.paused) || (ttsSupported && speechSynthesis.speaking);
+    document.querySelectorAll("[data-wave]").forEach((w) => w.classList.toggle("active", active));
+  }, 150);
+
+  // ======================================================================== boot
+  selectRole("manager");
+  if (S.token) start(); else { $("login").classList.remove("hidden"); $("login").classList.add("flex"); }
+  setInterval(() => document.querySelectorAll("#audit [title]").length && !document.hidden && S.audit.length && renderAudit(), 60000); // refresh "x min ago"
+})();
+{% endraw %}</script>
+</body>
+</html>
