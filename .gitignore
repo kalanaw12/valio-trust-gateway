@@ -7,3 +7,6 @@ examples/output/
 var/
 *.archived.jsonl
 *.jsonl.lock
+
+# local login notes (never commit)
+password.txt

@@ -71,6 +71,17 @@ when `VALIO_API_KEY` is set and otherwise uses the mock. Force one with
 `GATEWAY_UPSTREAM=live|mock`. In mock mode, `MOCK_OUT_OF_STOCK=464073,...`
 simulates stock-outs.
 
+### Dashboard logins (demo)
+
+Open `/dashboard` and sign in with one of the demo accounts:
+
+| Role | Username | Password | Access |
+|---|---|---|---|
+| Manager | `manager` | `manager123` | read/write: approve, reject, restock, order |
+| Auditor | `auditor` | `auditor123` | read-only |
+
+These are default demo passwords for the hackathon. Change them before any real use.
+
 ### Configuration
 
 | Variable | Default | Purpose |
